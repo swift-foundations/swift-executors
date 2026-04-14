@@ -16,12 +16,17 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../swift-kernel"),
+        // MUST depend on "Thread Synchronization" product only, never "Threads"
+        // (umbrella) or "Thread Pool" — those back-depend on Executors and
+        // would create a package-level cycle.
+        .package(path: "../swift-threads"),
     ],
     targets: [
         .target(
             name: "Executors",
             dependencies: [
                 .product(name: "Kernel", package: "swift-kernel"),
+                .product(name: "Thread Synchronization", package: "swift-threads"),
             ]
         ),
         .testTarget(

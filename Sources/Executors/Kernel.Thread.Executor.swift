@@ -5,6 +5,8 @@
 //  Created by Coen ten Thije Boonkkamp on 28/12/2025.
 //
 
+internal import Thread_Synchronization
+
 extension Kernel.Thread {
     /// A serial executor backed by a single dedicated OS thread.
     ///
