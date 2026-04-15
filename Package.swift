@@ -20,6 +20,7 @@ let package = Package(
         // (umbrella) or "Thread Pool" — those back-depend on Executors and
         // would create a package-level cycle.
         .package(path: "../swift-threads"),
+        .package(path: "../../swift-primitives/swift-executor-primitives"),
     ],
     targets: [
         .target(
@@ -27,6 +28,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Kernel", package: "swift-kernel"),
                 .product(name: "Thread Synchronization", package: "swift-threads"),
+                .product(name: "Executor Primitives", package: "swift-executor-primitives"),
             ]
         ),
         .testTarget(

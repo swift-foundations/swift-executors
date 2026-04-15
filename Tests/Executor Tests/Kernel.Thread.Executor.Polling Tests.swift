@@ -1,0 +1,24 @@
+//
+//  Kernel.Thread.Executor.Polling Tests.swift
+//  swift-executors
+//
+
+import Testing
+import Executors
+
+// Polling requires a Kernel.Event.Source which needs platform infrastructure.
+// Lifecycle and behavioral tests are provided by swift-io (Phase 3).
+// This file serves as a compile-validation placeholder.
+
+#if !os(Windows)
+
+@Suite
+struct PollingTests {
+    @Test("Polling.Outcome enum exists")
+    func outcomeEnum() {
+        _ = Kernel.Thread.Executor.Polling.Outcome.continue
+        _ = Kernel.Thread.Executor.Polling.Outcome.halt
+    }
+}
+
+#endif

@@ -5,8 +5,6 @@
 //  Created by Coen ten Thije Boonkkamp on 28/12/2025.
 //
 
-internal import Thread_Synchronization
-
 extension Kernel.Thread {
     /// A serial executor backed by a single dedicated OS thread.
     ///
@@ -27,8 +25,6 @@ extension Kernel.Thread {
     /// - **Task mode**: Jobs run with `runSynchronously(on: taskExecutor)`.
     ///   Use with `withTaskExecutorPreference`.
     ///
-    /// See: swift-platform-executors `PThreadExecutor` for the upstream pattern.
-    ///
     /// ## Lifecycle Requirements
     ///
     /// **IMPORTANT**: This type has strict lifecycle requirements:
@@ -43,36 +39,6 @@ extension Kernel.Thread {
     ///
     /// 3. **Shutdown is idempotent-ish**: Calling `shutdown()` on an already-shutdown
     ///    executor traps. Call exactly once.
-    ///
-    /// ## Example Usage
-    /// ```swift
-    /// // Actor pinning (serial mode — default)
-    /// let executor = Kernel.Thread.Executor()
-    /// defer { executor.shutdown() }
-    ///
-    /// actor MyActor {
-    ///     nonisolated var unownedExecutor: UnownedSerialExecutor {
-    ///         executor.asUnownedSerialExecutor()
-    ///     }
-    /// }
-    ///
-    /// // Task executor preference (task mode)
-    /// let executor = Kernel.Thread.Executor(mode: .task)
-    /// defer { executor.shutdown() }
-    ///
-    /// await withTaskExecutorPreference(executor) {
-    ///     // work runs on dedicated thread, off cooperative pool
-    /// }
-    /// ```
-    ///
-    /// ## Why These Traps Exist
-    /// These preconditions exist because silent failure would be worse:
-    /// - Leaking an OS thread is a resource leak that compounds over time
-    /// - Joining from self is undefined behavior on some platforms
-    /// - Double-shutdown indicates a logic error in the caller
-    ///
-    /// If you need a more forgiving API, consider wrapping this in a helper that
-    /// tracks shutdown state and handles edge cases for your use case.
     public final class Executor: SerialExecutor, TaskExecutor, @unchecked Sendable {
 
         /// Controls which executor identity is reported to the runtime when
@@ -85,9 +51,9 @@ extension Kernel.Thread {
         }
 
         private let mode: Mode
-        private let sync: Kernel.Thread.Synchronization<1>
-        private var jobs: Job.Queue
-        private var isRunning: Bool = true
+        private let wait: Executor_Primitives.Executor.Wait.Condvar
+        private var jobs: Executor_Primitives.Executor.Job.Queue
+        private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         private var threadHandle: Kernel.Thread.Handle?
 
         /// Creates a new executor thread.
@@ -99,18 +65,10 @@ extension Kernel.Thread {
         ///   `withTaskExecutorPreference`.
         public init(mode: Mode = .serial) {
             self.mode = mode
-            self.sync = Kernel.Thread.Synchronization()
-            self.jobs = Job.Queue()
+            self.wait = .init()
+            self.jobs = .init()
+            self._shutdown = .init()
 
-            // Retain self until the OS thread takes ownership.
-            // Uses Reference.Transfer.Retained for safe Sendable crossing with zero allocation.
-            // trap(_:_:) accepts the value explicitly, avoiding closure capture issues.
-            //
-            // Thread creation failure here is catastrophic - the executor cannot function
-            // without its thread. We use Kernel.Thread.trap because:
-            // 1. Most callers cannot recover from thread exhaustion
-            // 2. Making init() throwing would cascade through the entire API
-            // 3. Thread creation failure typically indicates system-wide resource exhaustion
             self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
                 let executor = retained.take()
                 executor.runLoop()
@@ -119,14 +77,10 @@ extension Kernel.Thread {
 
         deinit {
             guard let handle = threadHandle.take() else { return }
-            // Shutdown was never called — signal thread to stop and detach.
-            // The thread sees !isRunning on its next iteration and exits.
-            // Detach ensures no resource leak. This path runs for singletons
-            // during process exit cleanup.
-            sync.withLock {
-                isRunning = false
+            wait.withLock {
+                _shutdown.set()
             }
-            sync.broadcast()
+            wait.wakeAll()
             handle.detach()
         }
     }
@@ -135,16 +89,9 @@ extension Kernel.Thread {
 // MARK: - SerialExecutor
 
 extension Kernel.Thread.Executor {
-    /// Enqueue a job for execution on this executor.
-    ///
-    /// If the executor has been shut down, the job is executed inline on the
-    /// calling thread rather than silently dropped. This honors the
-    /// `SerialExecutor` contract (every enqueued job is eventually run) and
-    /// prevents deadlocks: the job typically hits the actor's lifecycle gate,
-    /// throws a shutdown error, and the suspended continuation resumes.
     public func enqueue(_ job: UnownedJob) {
-        let runInline: Bool = sync.withLock {
-            guard isRunning else { return true }
+        let runInline: Bool = wait.withLock {
+            guard !_shutdown.isSet else { return true }
             jobs.enqueue(job)
             return false
         }
@@ -156,13 +103,10 @@ extension Kernel.Thread.Executor {
                 unsafe job.runSynchronously(on: asUnownedTaskExecutor())
             }
         } else {
-            sync.signal()
+            wait.wake()
         }
     }
 
-    /// Returns an unowned reference to this executor.
-    ///
-    /// Used by actors to specify their custom executor via `unownedExecutor`.
     public func asUnownedSerialExecutor() -> UnownedSerialExecutor {
         unsafe UnownedSerialExecutor(ordinary: self)
     }
@@ -171,9 +115,6 @@ extension Kernel.Thread.Executor {
 // MARK: - TaskExecutor
 
 extension Kernel.Thread.Executor {
-    /// Enqueue an executor job for execution.
-    ///
-    /// This enables `Task(executorPreference:)` to work with this executor.
     public func enqueue(_ job: consuming ExecutorJob) {
         enqueue(UnownedJob(job))
     }
@@ -184,11 +125,11 @@ extension Kernel.Thread.Executor {
 extension Kernel.Thread.Executor {
     fileprivate func runLoop() {
         while true {
-            let job: UnownedJob? = sync.withLock {
-                while jobs.isEmpty && isRunning {
-                    sync.wait()
+            let job: UnownedJob? = wait.withLock {
+                while jobs.isEmpty && !_shutdown.isSet {
+                    wait.wait()
                 }
-                guard isRunning || !jobs.isEmpty else { return nil }
+                guard !_shutdown.isSet || !jobs.isEmpty else { return nil }
                 return jobs.dequeue()
             }
             guard let job else { return }
@@ -208,13 +149,10 @@ extension Kernel.Thread.Executor {
     /// Shutdown the executor thread.
     ///
     /// Signals the run loop to exit after processing any remaining jobs,
-    /// then joins the thread. The join completes in < 100µs — the thread
-    /// sees `!isRunning` and exits its run loop almost immediately.
+    /// then joins the thread.
     ///
     /// - Precondition: Must NOT be called from the executor thread itself.
-    ///   Doing so would deadlock (joining a thread from itself).
     /// - Precondition: Must be called exactly once before the executor is deallocated.
-    /// - Precondition: Must not be called before the thread has started.
     public func shutdown() {
         guard let handle = threadHandle.take() else {
             preconditionFailure(
@@ -227,10 +165,10 @@ extension Kernel.Thread.Executor {
             "Cannot shutdown executor from its own thread - would deadlock on join"
         )
 
-        sync.withLock {
-            isRunning = false
+        wait.withLock {
+            _shutdown.set()
         }
-        sync.broadcast()
+        wait.wakeAll()
         handle.join()
     }
 }
