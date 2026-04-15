@@ -81,7 +81,7 @@ extension Executor.Scheduled {
     /// Shutdown the timer thread. Does NOT shutdown the base executor.
     public func shutdown() {
         _shutdown.set()
-        wait.wakeAll()
+        wait.wake.all()
         timerThread.take()?.join()
     }
 }
@@ -101,7 +101,7 @@ extension Executor.Scheduled {
                     }
                     let now = ContinuousClock.now
                     if deadline <= now {
-                        priority.drainReady(now: now) { readyJobs.append($0) }
+                        priority.drain(now: now) { readyJobs.append($0) }
                         break
                     } else {
                         let remaining = now.duration(to: deadline)

@@ -14,8 +14,6 @@ extension Kernel.Thread.Executor.Sharded {
         /// Creates options with the specified thread count.
         ///
         /// - Parameter count: Number of threads. If nil, defaults to min(4, processorCount).
-        private static let defaultCount: Kernel.Thread.Count = try! .init(4)
-
         public init(count: Kernel.Thread.Count? = nil) {
             self.count =
                 count
@@ -25,4 +23,8 @@ extension Kernel.Thread.Executor.Sharded {
                 )
         }
     }
+}
+
+extension Kernel.Thread.Executor.Sharded.Options {
+    private static let defaultCount: Kernel.Thread.Count = try! .init(4)
 }

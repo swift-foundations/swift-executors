@@ -9,7 +9,7 @@ extension Executor.Wait {
     /// Wait primitive backed by pthread_cond_wait.
     ///
     /// The lock IS the queue-protecting lock. `wait` releases it atomically;
-    /// `wake` signals; `wakeAll` broadcasts (to unblock a closing executor).
+    /// `wake()` signals one waiter; `wake.all()` broadcasts.
     ///
     /// ## Wait.Primitive contract
     ///
@@ -19,7 +19,7 @@ extension Executor.Wait {
     /// existing type gains a retroactive conformance via typealias bridge
     /// (non-breaking).
     public final class Condvar: Sendable {
-        private let sync: Kernel.Thread.Synchronization<1>
+        internal let sync: Kernel.Thread.Synchronization<1>
 
         public init() {
             self.sync = .init()
@@ -44,16 +44,5 @@ extension Executor.Wait.Condvar {
     /// Wait with timeout. Returns `true` if signaled, `false` if timed out.
     public func wait(timeout: Duration) -> Bool {
         sync.wait(timeout: timeout)
-    }
-
-    /// Wake a single waiter. Thread-safe; does not require holding the lock.
-    public func wake() {
-        sync.signal()
-    }
-
-    /// Wake every waiter. Used on shutdown to force all workers to re-check
-    /// the shutdown flag.
-    public func wakeAll() {
-        sync.broadcast()
     }
 }

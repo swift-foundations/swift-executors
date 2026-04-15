@@ -8,7 +8,7 @@ Verification of 10 supervisor review findings (L3 scope: findings 1–6).
 |---|------------------|----------|--------|
 | 1 | Stealing ABBA deadlock — `trySteal()` inside own `wait.withLock` | Kernel.Thread.Executor.Stealing.swift:118–148 | RESOLVED — lock scopes are separated. Own lock (line 121) released before steal loop (lines 127–133). Steal acquires only victim's lock. No simultaneous lock holding. |
 | 2 | Polling `#if !os(Windows)` hides type | Kernel.Thread.Executor.Polling.swift:6 | OPEN — entire type behind `#if !os(Windows)`. See Code Surface finding #6 and Platform finding #2. |
-| 3 | Polling run loop never blocks | Kernel.Thread.Executor.Polling.swift:122–129 | OPEN — run loop delegates blocking to `tick()` closure by contract (documented at init line 48: "a non-blocking tick will busy-spin"). No `waitSource.wait()` in the run loop itself. Design choice, not defect — but a footgun if consumer omits the blocking call. |
+| 3 | Polling run loop never blocks | Kernel.Thread.Executor.Polling.swift:161–181 | RESOLVED 2026-04-15 — Phase 3a API revision (commit `e41aded`). Run loop now calls `waitSource.wait()` directly; tick signature changed to `(UnsafeBufferPointer<Kernel.Event>) -> Outcome` receiving events from the poll. Blocking is no longer the consumer's responsibility. |
 | 4 | Scheduled enqueues under lock | Executor.Scheduled.swift:92–118 | RESOLVED — `base.enqueue()` is outside the lock (lines 113–115). Comment at line 112: "Enqueue outside the lock". |
 | 5 | Scheduled missing TaskExecutor conformance | Executor.Scheduled.swift:52–56 | RESOLVED — conditional `TaskExecutor where Base: TaskExecutor` conformance present. |
 | 6 | Missing Executor.Main test | Executor.Main Tests.swift | RESOLVED — test exists (verifies `Main.shared.asUnownedSerialExecutor()` identity). Minimal but present. |
@@ -27,7 +27,7 @@ Verification of 10 supervisor review findings (L3 scope: findings 1–6).
 
 | # | Severity | Rule | Location | Finding | Status |
 |---|----------|------|----------|---------|--------|
-| 1 | MEDIUM | [API-NAME-002] | Kernel.Thread.Executor.Polling.swift:112 | `shutdownNow()` is compound identifier. Other executors use `shutdown()` — naming is inconsistent and the `Now` adds no semantic value (all shutdowns are immediate). | OPEN |
+| 1 | MEDIUM | [API-NAME-002] | Kernel.Thread.Executor.Polling.swift:145 | `shutdownNow()` is compound identifier. Other executors use `shutdown()` — naming is inconsistent and the `Now` adds no semantic value (all shutdowns are immediate). | RESOLVED 2026-04-15 — renamed to `shutdown()` with `isCurrent`-based join/detach logic. `IO.Event.Loop` updated to match. `Cooperative.shutdownNow()` and `Main.shutdownNow()` (findings #2, #3) still pending. |
 | 2 | MEDIUM | [API-NAME-002] | Executor.Cooperative.swift:66 | `shutdownNow()` — same compound identifier issue as #1 | OPEN |
 | 3 | MEDIUM | [API-NAME-002] | Executor.Main.swift:85 | `shutdownNow()` — same compound identifier issue as #1 | OPEN |
 | 4 | LOW | [API-NAME-002] | Executor.Wait.Condvar.swift:55 | `wakeAll()` is compound identifier. Nested form: `wake.all()`. Mitigated: single-use passthrough to `sync.broadcast()`. | OPEN |

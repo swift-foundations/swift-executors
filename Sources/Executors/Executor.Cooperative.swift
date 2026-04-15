@@ -15,7 +15,7 @@ extension Executor {
     /// // From another task:
     /// executor.enqueue(job)
     /// // On the calling thread:
-    /// executor.run()   // blocks until shutdownNow() is called
+    /// executor.run()   // blocks until shutdown() is called
     /// ```
     public final class Cooperative: SerialExecutor, @unchecked Sendable {
         private var jobs: Executor.Job.Queue
@@ -50,7 +50,7 @@ extension Executor.Cooperative {
 // MARK: - Run Loop
 
 extension Executor.Cooperative {
-    /// Drive the run loop on the caller's thread. Returns when `shutdownNow()` is called.
+    /// Drive the run loop on the caller's thread. Returns when `shutdown()` is called.
     public func run() {
         while !_shutdown.isSet {
             let job: UnownedJob? = wait.withLock {
@@ -63,8 +63,8 @@ extension Executor.Cooperative {
     }
 
     /// Signal the run loop to exit.
-    public func shutdownNow() {
+    public func shutdown() {
         _shutdown.set()
-        wait.wakeAll()
+        wait.wake.all()
     }
 }

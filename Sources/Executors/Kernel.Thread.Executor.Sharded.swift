@@ -6,6 +6,8 @@
 //
 
 import Synchronization
+import Index_Primitives
+import Ordinal_Primitives
 
 extension Kernel.Thread.Executor {
     /// A sharded pool of serial executors for parallel work dispatch.
@@ -36,15 +38,15 @@ extension Kernel.Thread.Executor {
     public final class Sharded: Sendable {
         private let executors: [Kernel.Thread.Executor]
         public let count: Kernel.Thread.Count
-        private let counter: Atomic<UInt64>
+        private let cursor: Atomic<Index<Kernel.Thread>>
 
         /// Creates a new sharded executor pool with the given options.
         ///
         /// Threads start immediately upon pool creation.
         public init(_ options: Options = .init()) {
             self.count = options.count
-            self.executors = (0..<Int(options.count)).map { _ in Kernel.Thread.Executor() }
-            self.counter = Atomic(0)
+            self.executors = Array(count: options.count) { _ in Kernel.Thread.Executor() }
+            self.cursor = .init(.zero)
         }
     }
 }
@@ -52,19 +54,16 @@ extension Kernel.Thread.Executor {
 extension Kernel.Thread.Executor.Sharded {
     /// Get the next executor using round-robin assignment.
     ///
-    /// Each call advances an internal counter, distributing work evenly
+    /// Each call atomically advances the cursor, distributing work evenly
     /// across available executor threads.
     ///
     /// ## Thread Safety
-    /// This method is safe to call from any thread. The counter uses atomic
-    /// `wrappingAdd` with relaxed ordering, which is sufficient for distribution
-    /// purposes (strict ordering is not required for round-robin assignment).
+    /// Safe to call from any thread. The cursor is an atomic typed position;
+    /// `advance(within:)` keeps it in `[0, count)` via CAS.
     ///
     /// - Returns: The next executor in the round-robin sequence.
     public func next() -> Kernel.Thread.Executor {
-        let index = counter.wrappingAdd(1, ordering: .relaxed).oldValue
-        let executorCount = UInt64(Int(self.count))
-        return executors[Int(index % executorCount)]
+        executors[cursor.advance(within: count)]
     }
 
     /// Get a specific executor by index.

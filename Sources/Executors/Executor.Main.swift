@@ -12,24 +12,21 @@ extension Executor {
     ///
     /// On Darwin, delegates to `DispatchQueue.main` for automatic main-thread
     /// integration. On Linux/Windows, provides a condvar-based pump that the
-    /// consumer must drive via `runMainLoop()`.
+    /// consumer must drive via `run()`.
     ///
     /// ## Platform asymmetry
     ///
     /// - **Darwin**: Jobs dispatched to `DispatchQueue.main`. No manual pumping
     ///   needed — the platform's main run loop drives execution automatically.
     /// - **Linux/Windows**: No OS-level main run loop exists. Consumer must call
-    ///   `runMainLoop()` from the main thread. Semantically equivalent but not
-    ///   automatic. `runMainLoop()` blocks until `shutdownNow()` is called.
+    ///   `run()` from the main thread. Semantically equivalent but not
+    ///   automatic. `run()` blocks until `shutdown()` is called.
     public final class Main: SerialExecutor, @unchecked Sendable {
         #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
         private var jobs: Executor.Job.Queue
         private let wait: Executor.Wait.Condvar
         private let _shutdown: Executor.Shutdown.Flag
         #endif
-
-        /// The shared main executor instance.
-        public static let shared: Main = .init()
 
         private init() {
             #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
@@ -39,6 +36,13 @@ extension Executor {
             #endif
         }
     }
+}
+
+// MARK: - Shared
+
+extension Executor.Main {
+    /// The shared main executor instance.
+    public static let shared: Executor.Main = .init()
 }
 
 // MARK: - SerialExecutor
@@ -67,10 +71,10 @@ extension Executor.Main {
 
 #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
 extension Executor.Main {
-    /// Drive the main pump on the calling thread. Blocks until `shutdownNow()`.
+    /// Drive the main pump on the calling thread. Blocks until `shutdown()`.
     ///
     /// - Important: Must be called from the main thread.
-    public func runMainLoop() {
+    public func run() {
         while !_shutdown.isSet {
             let job: UnownedJob? = wait.withLock {
                 while jobs.isEmpty && !_shutdown.isSet { wait.wait() }
@@ -82,9 +86,9 @@ extension Executor.Main {
     }
 
     /// Signal the main pump to exit.
-    public func shutdownNow() {
+    public func shutdown() {
         _shutdown.set()
-        wait.wakeAll()
+        wait.wake.all()
     }
 }
 #endif

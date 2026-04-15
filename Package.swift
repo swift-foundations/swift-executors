@@ -21,6 +21,9 @@ let package = Package(
         // would create a package-level cycle.
         .package(path: "../swift-threads"),
         .package(path: "../../swift-primitives/swift-executor-primitives"),
+        .package(path: "../../swift-primitives/swift-property-primitives"),
+        .package(path: "../../swift-primitives/swift-ordinal-primitives"),
+        .package(path: "../../swift-primitives/swift-index-primitives"),
     ],
     targets: [
         .target(
@@ -29,6 +32,9 @@ let package = Package(
                 .product(name: "Kernel", package: "swift-kernel"),
                 .product(name: "Thread Synchronization", package: "swift-threads"),
                 .product(name: "Executor Primitives", package: "swift-executor-primitives"),
+                .product(name: "Property Primitives", package: "swift-property-primitives"),
+                .product(name: "Ordinal Primitives", package: "swift-ordinal-primitives"),
+                .product(name: "Index Primitives", package: "swift-index-primitives"),
             ]
         ),
         .testTarget(
