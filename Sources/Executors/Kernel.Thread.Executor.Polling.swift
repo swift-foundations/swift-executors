@@ -162,6 +162,34 @@ extension Kernel.Thread.Executor.Polling {
     }
 }
 
+// MARK: - Isolation Verification
+
+extension Kernel.Thread.Executor.Polling {
+    /// Verifies the current execution context is on this executor's thread.
+    ///
+    /// Called by the Swift concurrency runtime when `assumeIsolated` cannot
+    /// determine executor identity via task-local state (e.g., synchronous
+    /// callbacks from the run loop's tick closure that execute outside a
+    /// Swift Task context).
+    ///
+    /// Returns `true` if the calling thread is this executor's OS thread,
+    /// `false` if the thread is known but not current, `nil` if the thread
+    /// handle is unavailable (post-shutdown).
+    public func isIsolatingCurrentContext() -> Bool? {
+        threadHandle?.isCurrent
+    }
+
+    /// Crash-or-pass isolation check. Called by the runtime as a last
+    /// resort after `isIsolatingCurrentContext()` returns `nil`.
+    public func checkIsolated() {
+        guard isIsolatingCurrentContext() == true else {
+            preconditionFailure(
+                "Kernel.Thread.Executor.Polling: expected current thread to be the executor's thread"
+            )
+        }
+    }
+}
+
 // MARK: - TaskExecutor
 
 extension Kernel.Thread.Executor.Polling {
