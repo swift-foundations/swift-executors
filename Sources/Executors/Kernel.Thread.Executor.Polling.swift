@@ -14,17 +14,29 @@ extension Kernel.Thread.Executor {
     ///
     /// One OS thread, one job queue, one `Executor.Wait.Event.Source`. The run
     /// loop interleaves drain-jobs with a blocking poll on the event source,
-    /// then passes received events to a consumer-supplied tick body.
+    /// then delivers the poll outcome to a consumer-supplied tick body. Tick
+    /// receives a `wait` thunk that either returns the events from the cycle
+    /// or throws the driver error.
     ///
     /// ## Event Flow
     ///
     /// ```
-    /// drain jobs → poll (blocking) → tick(events) → repeat
+    /// drain jobs → wait → tick(wait: try or catch) → repeat
     /// ```
     ///
     /// The run loop blocks in `waitSource.wait()` until kernel events arrive
     /// or the wakeup channel fires (from `enqueue()`). Domain-specific event
-    /// dispatch lives in the tick body.
+    /// dispatch and error policy both live in the tick body — errors are
+    /// NOT silently retried by the executor.
+    ///
+    /// ## Error Policy
+    ///
+    /// The executor does not classify driver errors (EINTR, ENOMEM, EAGAIN,
+    /// or fatal). Every outcome — success or failure — is delivered via the
+    /// typed-throws `wait` thunk. Tick catches with `throws(Kernel.Event.Driver.Error)`
+    /// and decides whether to `.continue` (optionally yielding first) or
+    /// `.halt`. Consumers that need transient-error retry implement it in
+    /// tick; consumers that treat any error as fatal return `.halt` directly.
     ///
     /// ## Race Safety
     ///
@@ -43,25 +55,33 @@ extension Kernel.Thread.Executor {
         private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         private var threadHandle: Kernel.Thread.Handle?
         private let maxEventsPerPoll: Int
-        private let tick: @Sendable (UnsafeBufferPointer<Kernel.Event>) -> Outcome
+        private let tick: @Sendable (
+            () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
+        ) -> Outcome
 
         /// Creates a polling executor.
         ///
-        /// Spawns an OS thread that runs the event loop. The run loop blocks in
-        /// the event source's poll until events arrive or the wakeup channel
-        /// fires, then invokes `tick` with the received events.
+        /// Spawns an OS thread that runs the event loop. The run loop blocks
+        /// in the event source's wait until events arrive or the wakeup
+        /// channel fires, then invokes `tick` with a typed-throws `wait`
+        /// thunk carrying the poll outcome.
         ///
         /// - Parameters:
         ///   - source: The kernel event source to poll. Consumed.
         ///   - maxEventsPerPoll: Maximum events per poll cycle. Default 256.
-        ///   - tick: Called each iteration with the events from the current poll
-        ///     cycle. Returns `.continue` to keep running or `.halt` to stop.
-        ///     Runs on the executor's own thread. The buffer pointer is valid
-        ///     only for the duration of the call.
+        ///   - tick: Called each iteration with a `wait` thunk. Invoke `try wait()`
+        ///     to either receive the events from the current cycle or propagate
+        ///     the driver error via `Kernel.Event.Driver.Error`. Returns
+        ///     `.continue` to keep running or `.halt` to stop. Runs on the
+        ///     executor's own thread. The buffer pointer returned by `wait()`
+        ///     is valid only for the duration of the tick call. Tick MUST call
+        ///     `wait()` — if it doesn't, the cycle's events or error are dropped.
         public init(
             source: consuming Kernel.Event.Source,
             maxEventsPerPoll: Int = 256,
-            tick: @escaping @Sendable (UnsafeBufferPointer<Kernel.Event>) -> Outcome
+            tick: @escaping @Sendable (
+                () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
+            ) -> Outcome
         ) {
             self.jobs = .init()
             self.drainBuffer = .init()
@@ -156,19 +176,27 @@ extension Kernel.Thread.Executor.Polling {
         while !_shutdown.isSet {
             drainJobs()
             if _shutdown.isSet { break }
+
+            let count: Int
+            let waitError: Kernel.Event.Driver.Error?
             do throws(Kernel.Event.Driver.Error) {
-                let count = try waitSource.wait(deadline: nil, into: &eventBuffer)
-                if _shutdown.isSet { break }
-                let outcome = unsafe eventBuffer.withUnsafeBufferPointer { base in
-                    let events = unsafe UnsafeBufferPointer<Kernel.Event>(
+                count = try waitSource.wait(deadline: nil, into: &eventBuffer)
+                waitError = nil
+            } catch {
+                count = 0
+                waitError = error
+            }
+            if _shutdown.isSet { break }
+
+            let outcome = unsafe eventBuffer.withUnsafeBufferPointer { base in
+                unsafe tick { () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event> in
+                    if let waitError { throw waitError }
+                    return unsafe UnsafeBufferPointer<Kernel.Event>(
                         start: base.baseAddress, count: count
                     )
-                    return unsafe tick(events)
                 }
-                if case .halt = outcome { _shutdown.set(); break }
-            } catch {
-                Kernel.Thread.yield()
             }
+            if case .halt = outcome { _shutdown.set(); break }
         }
         drainJobs()
     }
