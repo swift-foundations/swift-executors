@@ -11,35 +11,46 @@ extension Kernel.Thread {
     /// Conforms to both `SerialExecutor` (for actor pinning via `unownedExecutor`)
     /// and `TaskExecutor` (for `withTaskExecutorPreference`).
     ///
-    /// ## Thread Safety
-    /// This type is `@unchecked Sendable` because it provides internal synchronization.
-    /// Jobs are enqueued under lock and executed serially on the dedicated thread.
+    /// ## Safety Invariant
+    ///
+    /// This type is `Sendable` by virtue of internal synchronization: the job
+    /// queue (`jobs`), the shutdown flag (`_shutdown`), and the stored thread
+    /// handle (`threadHandle`) are all mutated exclusively under
+    /// `wait: Executor.Wait.Condvar` -- a mutex + condition variable wrapper.
+    /// `enqueue`, `runLoop`, and `shutdown` each route their state accesses
+    /// through `wait.withLock`, and cross-thread wake-ups go through
+    /// `wait.wake()` / `wait.wake.all()`. The caller MUST interact with the
+    /// executor only through its public API (`enqueue`, `shutdown`, the
+    /// unowned-executor accessors); reaching into the stored state otherwise
+    /// is undefined behaviour.
+    ///
+    /// ## Intended Use
+    ///
+    /// - Pinning Swift actors to a dedicated OS thread via `unownedExecutor`
+    ///   (`.serial` mode).
+    /// - Running jobs under `withTaskExecutorPreference` with a task-executor
+    ///   identity (`.task` mode).
+    /// - Workloads that need deterministic OS-level thread identity (e.g.,
+    ///   thread-local state, TLS-backed subsystems, priority pinning).
+    ///
+    /// ## Non-Goals
+    ///
+    /// - Not a work-stealing pool. For fan-out across N threads with stealing
+    ///   use `Kernel.Thread.Executor.Stealing`.
+    /// - Not safe to shutdown from its own thread. Doing so deadlocks -- the
+    ///   implementation detects the case and detaches instead of joining.
+    /// - Not idempotent on shutdown. `shutdown()` must be called exactly once
+    ///   before the executor is deallocated; a second call traps.
     ///
     /// ## Run Identity
     ///
-    /// The executor must report the correct identity when running jobs, otherwise
-    /// the Swift Concurrency runtime will re-enqueue them indefinitely.
-    ///
-    /// - **Serial mode** (default): Jobs run with `runSynchronously(on: serialExecutor)`.
-    ///   Use for actor pinning via `unownedExecutor`.
-    /// - **Task mode**: Jobs run with `runSynchronously(on: taskExecutor)`.
-    ///   Use with `withTaskExecutorPreference`.
-    ///
-    /// ## Lifecycle Requirements
-    ///
-    /// **IMPORTANT**: This type has strict lifecycle requirements:
-    ///
-    /// 1. **Must call `shutdown()` before deallocation**: The executor owns an OS thread
-    ///    that must be explicitly joined. Failing to call `shutdown()` before the executor
-    ///    is deallocated will trap with a diagnostic message.
-    ///
-    /// 2. **Cannot shutdown from executor's own thread**: Calling `shutdown()` from a job
-    ///    running on the executor would deadlock (joining a thread from itself). This is
-    ///    detected and traps with a diagnostic message.
-    ///
-    /// 3. **Shutdown is idempotent-ish**: Calling `shutdown()` on an already-shutdown
-    ///    executor traps. Call exactly once.
-    public final class Executor: SerialExecutor, TaskExecutor, @unchecked Sendable {
+    /// The executor reports the correct identity when running jobs (otherwise
+    /// the Swift Concurrency runtime re-enqueues indefinitely):
+    /// - `.serial` (default): `runSynchronously(on: serialExecutor)` -- use
+    ///   for actor pinning via `unownedExecutor`.
+    /// - `.task`: `runSynchronously(on: taskExecutor)` -- use with
+    ///   `withTaskExecutorPreference`.
+    public final class Executor: SerialExecutor, TaskExecutor, @unsafe @unchecked Sendable {
 
         private let mode: Mode
         private let wait: Executor_Primitives.Executor.Wait.Condvar

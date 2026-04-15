@@ -10,9 +10,36 @@ extension Executor {
     /// on the priority queue's head deadline. When the head fires, the job is
     /// moved onto the `Base` executor via `Base.enqueue`. Delegation model.
     ///
+    /// ## Safety Invariant
+    ///
+    /// This type is `Sendable` by virtue of internal synchronization: the
+    /// priority queue (`priority`), condition variable (`wait`), and shutdown
+    /// flag (`_shutdown`) are mutated exclusively under `wait: Executor.Wait.Condvar`
+    /// -- a mutex + condvar wrapper. The timer thread blocks on `wait` waiting
+    /// for the head deadline; producers wake it via `wait.wake()`. The stored
+    /// `base: Base` is itself `SerialExecutor & Sendable`. The caller MUST
+    /// interact with the executor only through the public API
+    /// (`enqueue`, `enqueue(_:after:)`, `shutdown`, the unowned-executor
+    /// accessors); reaching into stored state otherwise is undefined behaviour.
+    ///
+    /// ## Intended Use
+    ///
+    /// - Layering timer-driven (delayed) enqueue on top of an existing
+    ///   `SerialExecutor` without rewriting its state machine.
+    /// - Uniform deadline semantics across different base executor kinds
+    ///   (dedicated-thread, main, cooperative).
+    ///
+    /// ## Non-Goals
+    ///
+    /// - Not a full scheduler. Deadlines are monotonic continuous-clock
+    ///   absolute; priority between same-deadline jobs is implementation-defined.
+    /// - Not a replacement for `Base`. Immediate `enqueue` forwards to
+    ///   `Base.enqueue`; `Scheduled` adds only the deadline-queued overload.
+    /// - Shutdown shuts only the timer thread, not the base executor.
+    ///
     /// ## Lifecycle
     /// Call `shutdown()` before deallocation.
-    public final class Scheduled<Base: SerialExecutor & Sendable>: SerialExecutor, @unchecked Sendable {
+    public final class Scheduled<Base: SerialExecutor & Sendable>: SerialExecutor, @unsafe @unchecked Sendable {
         private let base: Base
         private var priority: Executor.Job.Priority
         private let wait: Executor.Wait.Condvar

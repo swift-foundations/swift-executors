@@ -4,7 +4,32 @@
 //
 
 extension Kernel.Thread.Executor.Stealing {
-    package final class Worker: @unchecked Sendable {
+    /// A single work-stealing worker owning one OS thread and one deque.
+    ///
+    /// ## Safety Invariant
+    ///
+    /// This type is `Sendable` by virtue of internal synchronization: the deque
+    /// (`deque`) and the thread handle (`handle`) are mutated exclusively
+    /// under `wait: Executor.Wait.Condvar`. The enqueue / pop / steal / wake
+    /// / join paths all serialize through `wait.withLock`. Cross-worker steal
+    /// attempts touch the victim's deque under the victim's own `wait` lock --
+    /// never under the stealer's. The caller (the parent `Stealing` pool)
+    /// MUST route all operations through the package-visible API.
+    ///
+    /// ## Intended Use
+    ///
+    /// - Internal building block of `Kernel.Thread.Executor.Stealing` --
+    ///   one Worker per OS thread in the pool.
+    /// - Hosts the work-stealing run loop: drain own deque, then attempt to
+    ///   steal from peer workers, then block on condvar.
+    ///
+    /// ## Non-Goals
+    ///
+    /// - Not a public API. Consumers use `Kernel.Thread.Executor.Stealing`,
+    ///   not `Worker` directly.
+    /// - Not safe to use outside a `Stealing` pool -- lifetime and shutdown
+    ///   semantics are owned by the pool.
+    package final class Worker: @unsafe @unchecked Sendable {
         let id: Int
         private var deque: Executor_Primitives.Executor.Job.Deque
         private let wait: Executor.Wait.Condvar

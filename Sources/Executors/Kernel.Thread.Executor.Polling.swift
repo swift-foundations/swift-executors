@@ -44,9 +44,49 @@ extension Kernel.Thread.Executor {
     /// dispatches actor jobs. Domain state touched by tick is single-threaded.
     /// See research doc V5.
     ///
+    /// ## Safety Invariant
+    ///
+    /// This type is `Sendable` by virtue of internal synchronization. Cross-
+    /// thread mutable state is guarded as follows:
+    /// - `jobs` / `drainBuffer` : protected by `queueLock: Kernel.Thread.Mutex`.
+    ///   Every `enqueue` / `drainJobs` operation serializes through
+    ///   `queueLock.withLock`.
+    /// - `_shutdown` : atomic `Shutdown.Flag`.
+    /// - `waitSource` : the kernel event source's wakeup channel is MPSC-safe
+    ///   by construction (POSIX `eventfd` / kqueue-signal equivalents); reads
+    ///   of the event buffer happen exclusively on the executor's own thread
+    ///   inside `runLoop`.
+    /// - `threadHandle` : mutated only at construction and shutdown boundaries.
+    ///
+    /// The `tick` closure fires on the executor's own thread -- the same
+    /// thread that dispatches actor jobs -- so domain state touched by `tick`
+    /// is single-threaded w.r.t. that executor's actor jobs.
+    ///
+    /// The caller MUST interact with the executor only through the public
+    /// API (`enqueue`, `shutdown`, the unowned-executor accessors, the
+    /// `source` coroutine-scoped accessor); reaching into stored state
+    /// otherwise is undefined behaviour.
+    ///
+    /// ## Intended Use
+    ///
+    /// - Event-loop executors where actor jobs and kernel events must be
+    ///   interleaved on the same thread (e.g., epoll/kqueue-driven I/O).
+    /// - Foundation-layer reactor threads that multiplex timers, descriptor
+    ///   readiness, and actor work on one OS thread.
+    ///
+    /// ## Non-Goals
+    ///
+    /// - Not a Windows executor. Depends on `Kernel.Event.Source` which
+    ///   requires epoll (Linux) or kqueue (Darwin). A future
+    ///   `Kernel.Thread.Executor.IOCP` sibling will serve the Windows role.
+    /// - Not idempotent on shutdown -- safe to call from any thread
+    ///   (including the executor's own thread), but not from inside the
+    ///   `tick` callback at the same moment.
+    /// - Not a work-stealing executor. Single-threaded by design.
+    ///
     /// ## Lifecycle
     /// Call `shutdown()` before deallocation.
-    public final class Polling: SerialExecutor, TaskExecutor, @unchecked Sendable {
+    public final class Polling: SerialExecutor, TaskExecutor, @unsafe @unchecked Sendable {
 
         private var jobs: Executor_Primitives.Executor.Job.Queue
         private var drainBuffer: Executor_Primitives.Executor.Job.Queue

@@ -14,14 +14,39 @@ extension Executor {
     /// integration. On Linux/Windows, provides a condvar-based pump that the
     /// consumer must drive via `run()`.
     ///
-    /// ## Platform asymmetry
+    /// ## Safety Invariant
     ///
-    /// - **Darwin**: Jobs dispatched to `DispatchQueue.main`. No manual pumping
-    ///   needed — the platform's main run loop drives execution automatically.
-    /// - **Linux/Windows**: No OS-level main run loop exists. Consumer must call
-    ///   `run()` from the main thread. Semantically equivalent but not
-    ///   automatic. `run()` blocks until `shutdown()` is called.
-    public final class Main: SerialExecutor, @unchecked Sendable {
+    /// This type is `Sendable` by virtue of internal synchronization:
+    /// - On Darwin, all enqueue paths dispatch into `DispatchQueue.main`,
+    ///   which owns its own lock-free MPSC enqueue primitive and is
+    ///   architecturally Sendable.
+    /// - On Linux / Windows, the job queue (`jobs`), condition variable
+    ///   (`wait`), and shutdown flag (`_shutdown`) are mutated exclusively
+    ///   under `wait: Executor.Wait.Condvar` -- a mutex + condvar wrapper.
+    ///   `enqueue`, `run`, and `shutdown` route state accesses through
+    ///   `wait.withLock`.
+    ///
+    /// The caller MUST interact with the executor only through its public
+    /// API. Do not read or mutate the platform-specific stored state
+    /// directly.
+    ///
+    /// ## Intended Use
+    ///
+    /// - Pinning actors to the OS main thread via `Executor.Main.shared`.
+    /// - Providing a SerialExecutor target on platforms without an ambient
+    ///   main run loop (Linux, Windows) by manually driving `run()` from
+    ///   the main thread.
+    ///
+    /// ## Non-Goals
+    ///
+    /// - Not a TaskExecutor. Main-thread dispatch implies serial ordering;
+    ///   task-executor semantics are not offered.
+    /// - Not a substitute for `DispatchMain()`. On Linux/Windows the pump
+    ///   blocks only until `shutdown()`; there is no ambient integration
+    ///   with OS run loops.
+    /// - Not multi-instance. The type is exposed only via
+    ///   `Executor.Main.shared`.
+    public final class Main: SerialExecutor, @unsafe @unchecked Sendable {
         #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
         private var jobs: Executor.Job.Queue
         private let wait: Executor.Wait.Condvar
