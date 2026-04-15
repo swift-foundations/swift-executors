@@ -86,6 +86,7 @@ extension Kernel.Thread.Executor {
     ///
     /// ## Lifecycle
     /// Call `shutdown()` before deallocation.
+    @safe
     public final class Polling: SerialExecutor, TaskExecutor, @unsafe @unchecked Sendable {
 
         private var jobs: Executor_Primitives.Executor.Job.Queue
@@ -95,7 +96,7 @@ extension Kernel.Thread.Executor {
         private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         private var threadHandle: Kernel.Thread.Handle?
         private let maxEventsPerPoll: Int
-        private let tick: @Sendable (
+        private let tick: (
             () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
         ) -> Outcome
 
@@ -119,7 +120,7 @@ extension Kernel.Thread.Executor {
         public init(
             source: consuming Kernel.Event.Source,
             maxEventsPerPoll: Int = 256,
-            tick: @escaping @Sendable (
+            tick: sending @escaping (
                 () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
             ) -> Outcome
         ) {
