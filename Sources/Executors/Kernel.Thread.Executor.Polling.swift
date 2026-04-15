@@ -3,21 +3,34 @@
 //  swift-executors
 //
 
+// WHY: #if !os(Windows) — Kernel.Event.Source requires epoll (Linux) or
+// kqueue (Darwin), neither available on Windows. A future
+// Kernel.Thread.Executor.IOCP sibling will serve the Windows role.
+// TRACKING: executor-package-design.md Decision #6.
 #if !os(Windows)
 
 extension Kernel.Thread.Executor {
     /// Single-thread executor whose wait primitive is a kernel event source.
     ///
     /// One OS thread, one job queue, one `Executor.Wait.Event.Source`. The run
-    /// loop interleaves drain-jobs with a consumer-supplied tick body that polls
-    /// and dispatches kernel events. Absorbs `IO.Event.Loop` and
-    /// `IO.Completion.Loop` as data-plane consumers.
+    /// loop interleaves drain-jobs with a blocking poll on the event source,
+    /// then passes received events to a consumer-supplied tick body.
+    ///
+    /// ## Event Flow
+    ///
+    /// ```
+    /// drain jobs → poll (blocking) → tick(events) → repeat
+    /// ```
+    ///
+    /// The run loop blocks in `waitSource.wait()` until kernel events arrive
+    /// or the wakeup channel fires (from `enqueue()`). Domain-specific event
+    /// dispatch lives in the tick body.
     ///
     /// ## Race Safety
     ///
     /// The tick body runs on the executor's own thread — the same thread that
-    /// dispatches actor jobs. Domain state (registrations, entries, the source)
-    /// is touched by a single thread. See research doc V5.
+    /// dispatches actor jobs. Domain state touched by tick is single-threaded.
+    /// See research doc V5.
     ///
     /// ## Lifecycle
     /// Call `shutdownNow()` before deallocation.
@@ -36,26 +49,34 @@ extension Kernel.Thread.Executor {
         private var waitSource: Executor_Primitives.Executor.Wait.Event.Source
         private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         private var threadHandle: Kernel.Thread.Handle?
-        private let tick: @Sendable () -> Outcome
+        private let maxEventsPerPoll: Int
+        private let tick: @Sendable (UnsafeBufferPointer<Kernel.Event>) -> Outcome
 
         /// Creates a polling executor.
         ///
+        /// Spawns an OS thread that runs the event loop. The run loop blocks in
+        /// the event source's poll until events arrive or the wakeup channel
+        /// fires, then invokes `tick` with the received events.
+        ///
         /// - Parameters:
         ///   - source: The kernel event source to poll. Consumed.
-        ///   - tick: Called each iteration after draining pending jobs. The tick
-        ///     body MUST include a blocking wait (typically via `withSource { $0.poll(...) }`)
-        ///     — a non-blocking tick will busy-spin. Returns `.continue` to keep
-        ///     running or `.halt` to stop. Runs on the executor's own thread.
+        ///   - maxEventsPerPoll: Maximum events per poll cycle. Default 256.
+        ///   - tick: Called each iteration with the events from the current poll
+        ///     cycle. Returns `.continue` to keep running or `.halt` to stop.
+        ///     Runs on the executor's own thread. The buffer pointer is valid
+        ///     only for the duration of the call.
         public init(
             source: consuming Kernel.Event.Source,
-            tick: @escaping @Sendable () -> Outcome
+            maxEventsPerPoll: Int = 256,
+            tick: @escaping @Sendable (UnsafeBufferPointer<Kernel.Event>) -> Outcome
         ) {
             self.jobs = .init()
             self.drainBuffer = .init()
             self.queueLock = .init()
             self.waitSource = .init(source: consume source)
             self._shutdown = .init()
-            self.tick = tick
+            self.maxEventsPerPoll = maxEventsPerPoll
+            unsafe (self.tick = tick)
             self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
                 retained.take().runLoop()
             }
@@ -99,9 +120,15 @@ extension Kernel.Thread.Executor.Polling {
 // MARK: - Source Access
 
 extension Kernel.Thread.Executor.Polling {
-    /// Access the underlying event source for registration and configuration.
-    public func withSource<R>(_ body: (inout Kernel.Event.Source) -> R) -> R {
-        waitSource.withSource(body)
+    /// Direct access to the underlying event source for registration
+    /// and configuration. Coroutine-scoped — the reference cannot escape.
+    ///
+    /// MUST be called from the executor's own thread (actor methods
+    /// pinned to this executor). Single-threaded access is guaranteed
+    /// by actor isolation, not by this accessor.
+    public var source: Kernel.Event.Source {
+        _read { yield waitSource.source }
+        _modify { yield &waitSource.source }
     }
 }
 
@@ -109,6 +136,11 @@ extension Kernel.Thread.Executor.Polling {
 
 extension Kernel.Thread.Executor.Polling {
     /// Signal the run loop to halt and join the thread.
+    ///
+    /// - Precondition: Must NOT be called from the executor's own thread
+    ///   (joining the current thread deadlocks). The architecture prevents
+    ///   this in normal use — shutdown is called from outside the loop.
+    ///   A runtime `isCurrent` check is tracked for Phase D.
     public func shutdownNow() {
         _shutdown.set()
         waitSource.wakeup.wake()
@@ -120,10 +152,23 @@ extension Kernel.Thread.Executor.Polling {
 
 extension Kernel.Thread.Executor.Polling {
     private func runLoop() {
+        var eventBuffer = Array<Kernel.Event>(repeating: Kernel.Event.empty, count: maxEventsPerPoll)
         while !_shutdown.isSet {
             drainJobs()
             if _shutdown.isSet { break }
-            if case .halt = tick() { _shutdown.set(); break }
+            do throws(Kernel.Event.Driver.Error) {
+                let count = try waitSource.wait(deadline: nil, into: &eventBuffer)
+                if _shutdown.isSet { break }
+                let outcome = unsafe eventBuffer.withUnsafeBufferPointer { base in
+                    let events = unsafe UnsafeBufferPointer<Kernel.Event>(
+                        start: base.baseAddress, count: count
+                    )
+                    return unsafe tick(events)
+                }
+                if case .halt = outcome { _shutdown.set(); break }
+            } catch {
+                Kernel.Thread.yield()
+            }
         }
         drainJobs()
     }
