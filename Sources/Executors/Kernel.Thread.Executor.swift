@@ -41,15 +41,6 @@ extension Kernel.Thread {
     ///    executor traps. Call exactly once.
     public final class Executor: SerialExecutor, TaskExecutor, @unchecked Sendable {
 
-        /// Controls which executor identity is reported to the runtime when
-        /// running jobs.
-        public enum Mode {
-            /// Report as serial executor. Use for actor pinning.
-            case serial
-            /// Report as task executor. Use with `withTaskExecutorPreference`.
-            case task
-        }
-
         private let mode: Mode
         private let wait: Executor_Primitives.Executor.Wait.Condvar
         private var jobs: Executor_Primitives.Executor.Job.Queue
@@ -80,7 +71,7 @@ extension Kernel.Thread {
             wait.withLock {
                 _shutdown.set()
             }
-            wait.wakeAll()
+            wait.wake.all()
             handle.detach()
         }
     }
@@ -160,15 +151,20 @@ extension Kernel.Thread.Executor {
             )
         }
 
-        precondition(
-            !handle.isCurrent,
-            "Cannot shutdown executor from its own thread - would deadlock on join"
-        )
-
         wait.withLock {
             _shutdown.set()
         }
-        wait.wakeAll()
-        handle.join()
+        wait.wake.all()
+
+        if handle.isCurrent {
+            // Actor deinit dispatched on this executor's own thread.
+            // Cannot join — would deadlock. The thread exits promptly
+            // because _shutdown is set and the run loop checks it each
+            // iteration. Detach releases the handle; the OS reclaims
+            // the thread stack when it exits.
+            handle.detach()
+        } else {
+            handle.join()
+        }
     }
 }

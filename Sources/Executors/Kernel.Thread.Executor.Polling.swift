@@ -33,15 +33,8 @@ extension Kernel.Thread.Executor {
     /// See research doc V5.
     ///
     /// ## Lifecycle
-    /// Call `shutdownNow()` before deallocation.
+    /// Call `shutdown()` before deallocation.
     public final class Polling: SerialExecutor, TaskExecutor, @unchecked Sendable {
-        /// Outcome returned from the tick body.
-        public enum Outcome: Sendable {
-            /// Continue the run loop.
-            case `continue`
-            /// Halt the run loop.
-            case halt
-        }
 
         private var jobs: Executor_Primitives.Executor.Job.Queue
         private var drainBuffer: Executor_Primitives.Executor.Job.Queue
@@ -135,16 +128,23 @@ extension Kernel.Thread.Executor.Polling {
 // MARK: - Shutdown
 
 extension Kernel.Thread.Executor.Polling {
-    /// Signal the run loop to halt and join the thread.
+    /// Signal the run loop to halt and clean up the thread.
     ///
-    /// - Precondition: Must NOT be called from the executor's own thread
-    ///   (joining the current thread deadlocks). The architecture prevents
-    ///   this in normal use — shutdown is called from outside the loop.
-    ///   A runtime `isCurrent` check is tracked for Phase D.
-    public func shutdownNow() {
+    /// Safe to call from any thread, including the executor's own thread.
+    /// When called from the executor's own thread (e.g., actor deinit
+    /// dispatched on this executor), the thread is detached instead of
+    /// joined — the thread exits promptly because `_shutdown` is set
+    /// and any `[weak self]` tick closure returns `.halt`.
+    public func shutdown() {
         _shutdown.set()
         waitSource.wakeup.wake()
-        threadHandle.take()?.join()
+        if let handle = threadHandle.take() {
+            if handle.isCurrent {
+                handle.detach()
+            } else {
+                handle.join()
+            }
+        }
     }
 }
 
