@@ -37,7 +37,7 @@ extension Kernel.Thread.Executor.Stealing {
 
         init(id: Int) {
             self.id = id
-            self.deque = .init()
+            self.deque = .init(capacity: 1024)
             self.wait = .init()
         }
 
@@ -49,7 +49,7 @@ extension Kernel.Thread.Executor.Stealing {
         }
 
         func enqueue(_ job: UnownedJob) {
-            wait.withLock { deque.push(job) }
+            wait.withLock { _ = deque.push(job) }
             wait.wake()
         }
 
@@ -60,7 +60,7 @@ extension Kernel.Thread.Executor.Stealing {
         private func runLoop(pool: Kernel.Thread.Executor.Stealing) {
             while !pool._shutdown.isSet {
                 // Own deque — under own lock
-                if let job = wait.withLock({ deque.pop() }) {
+                if let job = wait.withLock({ deque.take() }) {
                     unsafe job.runSynchronously(on: pool.asUnownedTaskExecutor())
                     continue
                 }
@@ -85,7 +85,7 @@ extension Kernel.Thread.Executor.Stealing {
                 }
             }
             // Drain remaining
-            while let job = wait.withLock({ deque.pop() }) {
+            while let job = wait.withLock({ deque.take() }) {
                 unsafe job.runSynchronously(on: pool.asUnownedTaskExecutor())
             }
         }
