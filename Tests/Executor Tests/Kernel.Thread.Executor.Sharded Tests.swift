@@ -70,6 +70,22 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
         pool.shutdown()
         // No hang = success
     }
+
+    @Test("priorityTracking defaults to false")
+    func priorityTrackingDefaultsFalse() {
+        let options = Kernel.Thread.Executor.Sharded.Options(count: 2)
+        #expect(options.priorityTracking == false)
+    }
+
+    @Test("priorityTracking true runs jobs correctly")
+    func priorityTrackingTrueRunsJobs() async {
+        let pool = Kernel.Thread.Executor.Sharded(
+            .init(count: 2, priorityTracking: true)
+        )
+        let result = await Task(executorPreference: pool.next()) { 42 }.value
+        #expect(result == 42)
+        pool.shutdown()
+    }
 }
 
 

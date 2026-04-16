@@ -53,6 +53,7 @@ extension Kernel.Thread {
     public final class Executor: SerialExecutor, TaskExecutor, @unsafe @unchecked Sendable {
 
         private let mode: Mode
+        private let priorityTracking: Bool
         private let wait: Executor_Primitives.Executor.Wait.Condvar
         private var jobs: Executor_Primitives.Executor.Job.Queue
         private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
@@ -62,11 +63,18 @@ extension Kernel.Thread {
         ///
         /// The thread starts immediately and begins waiting for jobs.
         ///
-        /// - Parameter mode: Controls which identity is reported to the runtime.
-        ///   Use `.serial` (default) for actor pinning, `.task` for
-        ///   `withTaskExecutorPreference`.
-        public init(mode: Mode = .serial) {
+        /// - Parameters:
+        ///   - mode: Controls which identity is reported to the runtime.
+        ///     Use `.serial` (default) for actor pinning, `.task` for
+        ///     `withTaskExecutorPreference`.
+        ///   - priorityTracking: If `true`, this thread's QoS class is
+        ///     bumped to match each job's priority for the duration of
+        ///     job execution on Darwin (no-op on other platforms). See
+        ///     `Research/priority-escalation-policy.md`. Default
+        ///     `false`.
+        public init(mode: Mode = .serial, priorityTracking: Bool = false) {
             self.mode = mode
+            self.priorityTracking = priorityTracking
             self.wait = .init()
             self.jobs = .init()
             self._shutdown = .init()
@@ -100,9 +108,17 @@ extension Kernel.Thread.Executor {
         if runInline {
             switch mode {
             case .serial:
-                unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onSerial: asUnownedSerialExecutor(),
+                    priorityTracking: priorityTracking
+                )
             case .task:
-                unsafe job.runSynchronously(on: asUnownedTaskExecutor())
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onTask: asUnownedTaskExecutor(),
+                    priorityTracking: priorityTracking
+                )
             }
         } else {
             wait.wake()
@@ -163,9 +179,17 @@ extension Kernel.Thread.Executor {
             guard let job else { return }
             switch mode {
             case .serial:
-                unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onSerial: asUnownedSerialExecutor(),
+                    priorityTracking: priorityTracking
+                )
             case .task:
-                unsafe job.runSynchronously(on: asUnownedTaskExecutor())
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onTask: asUnownedTaskExecutor(),
+                    priorityTracking: priorityTracking
+                )
             }
         }
     }

@@ -96,6 +96,7 @@ extension Kernel.Thread.Executor {
         private let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         private var threadHandle: Kernel.Thread.Handle?
         private let maxEventsPerPoll: Int
+        private let priorityTracking: Bool
         private let tick: (
             () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
         ) -> Outcome
@@ -110,6 +111,10 @@ extension Kernel.Thread.Executor {
         /// - Parameters:
         ///   - source: The kernel event source to poll. Consumed.
         ///   - maxEventsPerPoll: Maximum events per poll cycle. Default 256.
+        ///   - priorityTracking: If `true`, this executor's thread has its
+        ///     QoS class bumped to match each job's priority for the
+        ///     duration of job execution on Darwin (no-op on other platforms).
+        ///     See `Research/priority-escalation-policy.md`. Default `false`.
         ///   - tick: Called each iteration with a `wait` thunk. Invoke `try wait()`
         ///     to either receive the events from the current cycle or propagate
         ///     the driver error via `Kernel.Event.Driver.Error`. Returns
@@ -120,6 +125,7 @@ extension Kernel.Thread.Executor {
         public init(
             source: consuming Kernel.Event.Source,
             maxEventsPerPoll: Int = 256,
+            priorityTracking: Bool = false,
             tick: sending @escaping (
                 () throws(Kernel.Event.Driver.Error) -> UnsafeBufferPointer<Kernel.Event>
             ) -> Outcome
@@ -130,6 +136,7 @@ extension Kernel.Thread.Executor {
             self.waitSource = .init(source: consume source)
             self._shutdown = .init()
             self.maxEventsPerPoll = maxEventsPerPoll
+            self.priorityTracking = priorityTracking
             unsafe (self.tick = tick)
             self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
                 retained.take().runLoop()
@@ -152,7 +159,11 @@ extension Kernel.Thread.Executor.Polling {
             return false
         }
         if runInline {
-            unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+            unsafe Kernel.Thread.Executor.runJob(
+                job,
+                onSerial: asUnownedSerialExecutor(),
+                priorityTracking: priorityTracking
+            )
         } else {
             waitSource.wakeup.wake()
         }
@@ -275,7 +286,11 @@ extension Kernel.Thread.Executor.Polling {
             queueLock.withLock { jobs.drain(into: &drainBuffer) }
             guard !drainBuffer.isEmpty else { return }
             while let job = drainBuffer.dequeue() {
-                unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onSerial: asUnownedSerialExecutor(),
+                    priorityTracking: priorityTracking
+                )
             }
         }
     }

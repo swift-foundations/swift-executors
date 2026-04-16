@@ -50,7 +50,10 @@ extension Kernel.Thread.Executor {
         /// Threads start immediately upon pool creation.
         public init(_ options: Options = .init()) {
             self.count = options.count
-            self.executors = Array(count: options.count) { _ in Kernel.Thread.Executor() }
+            let priorityTracking = options.priorityTracking
+            self.executors = Array(count: options.count) { _ in
+                Kernel.Thread.Executor(priorityTracking: priorityTracking)
+            }
             self.cursor = .init(Atomic<Index<Kernel.Thread>>(.zero))
         }
     }

@@ -53,12 +53,14 @@ extension Kernel.Thread.Executor {
     public final class Stealing: TaskExecutor, @unsafe @unchecked Sendable {
         internal let workers: [Worker]
         internal let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
+        internal let priorityTracking: Bool
         private let cursor: Atomic<Index<Kernel.Thread>>
         public let count: Kernel.Thread.Count
 
         public init(_ options: Options = .init()) {
             self.count = options.count
             self._shutdown = .init()
+            self.priorityTracking = options.priorityTracking
             self.cursor = .init(.zero)
             self.workers = Array(count: options.count) { position in
                 Worker(id: Int(bitPattern: position.ordinal))
