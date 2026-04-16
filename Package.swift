@@ -24,6 +24,7 @@ let package = Package(
         .package(path: "../../swift-primitives/swift-property-primitives"),
         .package(path: "../../swift-primitives/swift-ordinal-primitives"),
         .package(path: "../../swift-primitives/swift-index-primitives"),
+        .package(path: "../../swift-primitives/swift-cpu-primitives"),
     ],
     targets: [
         .target(
@@ -35,6 +36,7 @@ let package = Package(
                 .product(name: "Property Primitives", package: "swift-property-primitives"),
                 .product(name: "Ordinal Primitives", package: "swift-ordinal-primitives"),
                 .product(name: "Index Primitives", package: "swift-index-primitives"),
+                .product(name: "CPU Primitives", package: "swift-cpu-primitives"),
             ]
         ),
         .testTarget(

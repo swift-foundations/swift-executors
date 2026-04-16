@@ -8,6 +8,7 @@
 import Synchronization
 import Index_Primitives
 import Ordinal_Primitives
+import CPU_Primitives
 
 extension Kernel.Thread.Executor {
     /// A sharded pool of serial executors for parallel work dispatch.
@@ -35,10 +36,14 @@ extension Kernel.Thread.Executor {
     /// let executor = pool.next()
     /// // Use executor for task dispatch or actor pinning
     /// ```
-    public final class Sharded: Sendable {
+    public final class Sharded: @unchecked Sendable {
         private let executors: [Kernel.Thread.Executor]
         public let count: Kernel.Thread.Count
-        private let cursor: Atomic<Index<Kernel.Thread>>
+        // WHY: `cursor` is placed in its own 128-byte-aligned heap slot via
+        // WHY: CPU.Cache.Padded so that the hot write-contended atomic cannot
+        // WHY: false-share with the read-mostly `executors` array reference
+        // WHY: and `count` scalar. See numa-aware-sharding.md Q1.
+        private let cursor: CPU.Cache.Padded<Atomic<Index<Kernel.Thread>>>
 
         /// Creates a new sharded executor pool with the given options.
         ///
@@ -46,7 +51,7 @@ extension Kernel.Thread.Executor {
         public init(_ options: Options = .init()) {
             self.count = options.count
             self.executors = Array(count: options.count) { _ in Kernel.Thread.Executor() }
-            self.cursor = .init(.zero)
+            self.cursor = .init(Atomic<Index<Kernel.Thread>>(.zero))
         }
     }
 }
@@ -63,7 +68,7 @@ extension Kernel.Thread.Executor.Sharded {
     ///
     /// - Returns: The next executor in the round-robin sequence.
     public func next() -> Kernel.Thread.Executor {
-        executors[cursor.advance(within: count)]
+        executors[cursor.value.advance(within: count)]
     }
 
     /// Get a specific executor by index.

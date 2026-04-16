@@ -2,9 +2,9 @@
 
 <!--
 ---
-version: 0.1.0
+version: 0.2.0
 last_updated: 2026-04-16
-status: IN_PROGRESS
+status: DECISION
 tier: 2
 ---
 -->
@@ -187,9 +187,9 @@ Embedded." No additional guard needed — M3 is already platform-gated.
 
 ## Outcome
 
-**Status:** `IN_PROGRESS`.
+**Status:** `DECISION`.
 
-### Initial recommendations
+### Locked verdicts
 
 | Composition | Verdict | Guard strategy |
 |-------------|---------|---------------|
@@ -214,22 +214,51 @@ Embedded." No additional guard needed — M3 is already platform-gated.
 5. `TaskExecutor` conformances must be `#if !$Embedded` gated across
    the board.
 
-### Next steps before promotion to DECISION
+### Post-DECISION implementation follow-ups
 
-1. **Audit every `TaskExecutor` conformance** in swift-executors source
-   and add `#if !$Embedded` guards. Low-cost, can be done immediately.
-2. **Design the Embedded `Wait` backend** for `Cooperative` — either
-   `#if $Embedded` busy-wait or a trait-based wait-strategy that
-   accepts a platform-provided WFI closure. Decide which.
-3. **Coordinate with `cooperative-donation-contract.md`** — the
-   donation contract for `runUntil` shapes the Embedded `Cooperative`
-   surface. That note needs to declare whether the Embedded variant
-   drops `runUntil` or implements it with busy-wait.
-4. **Track RTOS `Kernel.Thread` backend** as a separate research
-   topic in `swift-kernel-primitives` (not this document). When that
-   lands, re-evaluate CONDITIONAL compositions.
-5. **Track stdlib Embedded concurrency stabilization** — no SE
-   proposal exists yet. When one arrives, re-evaluate all verdicts.
+The research verdicts are locked; the items below are implementation
+steps whose prerequisites are external to swift-executors. None
+blocks the promotion of this note to DECISION.
+
+1. **Audit every `TaskExecutor` conformance and add `#if !$Embedded`
+   guards.** Deferred until `swift-executors/Package.swift` adds an
+   Embedded platform. As of 2026-04-16 the Package targets only
+   `.macOS, .iOS, .tvOS, .watchOS, .visionOS` — none of which ever
+   sets `$Embedded`. Adding guards today produces dead conditional
+   branches. When Embedded support is added, gate
+   `TaskExecutor` extensions on `Polling`, `Completion`, `Stealing`,
+   `Kernel.Thread.Executor` (base), and `Scheduled` behind
+   `#if !$Embedded`. (5 sites; mechanical.)
+2. **Design the Embedded `Wait` backend** for `Cooperative` — blocked
+   on RTOS `Kernel.Thread` backend (separate prerequisite). Without a
+   concrete target RTOS, the choice between `#if $Embedded` busy-wait
+   and a platform-provided-WFI trait is premature.
+3. ~~**Coordinate with `cooperative-donation-contract.md`**~~ **DONE** —
+   that DECISION-status note already declares the donation contract
+   axes; Embedded variants are an implementation-time concern for
+   when the RTOS backend lands.
+4. **Track RTOS `Kernel.Thread` backend** in `swift-kernel-primitives`.
+   External prerequisite. When it lands, re-evaluate CONDITIONAL
+   compositions.
+5. **Track stdlib Embedded concurrency stabilization.** No SE
+   proposal exists yet (2026-04-16). When one arrives, re-evaluate
+   all verdicts.
+
+### Why promote now
+
+The note's research output is the verdict table above plus the
+rationale in §Analysis. Every verdict is grounded in either (a) a
+stdlib constraint (`@_unavailableInEmbedded`, `#if !$Embedded`
+protocol gating), (b) an OS primitive's absence on Embedded
+(epoll/kqueue/io_uring/libdispatch), or (c) a clock-family
+constraint (`ContinuousClock` unavailable). These are all external
+facts; further research within this note's scope cannot change them.
+The items that would change the verdicts — new Embedded concurrency
+SE proposals, RTOS `Kernel.Thread` backends, stdlib `SchedulingExecutor`
+shipping in the SDK — live in other research streams or external
+repos. Keeping this note at IN_PROGRESS while waiting on external
+events is the wrong queue discipline; amendments when events land
+are the right mechanism.
 
 ### SDK interface finding (2026-04-16)
 

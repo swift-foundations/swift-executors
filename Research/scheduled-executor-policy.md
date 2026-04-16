@@ -2,9 +2,9 @@
 
 <!--
 ---
-version: 0.1.0
+version: 0.3.0
 last_updated: 2026-04-16
-status: IN_PROGRESS
+status: DECISION
 tier: 2
 ---
 -->
@@ -455,12 +455,12 @@ the policy for hard ones. We are in the soft-deadline regime.
 
 ## Outcome
 
-**Status:** `IN_PROGRESS`.
+**Status:** `DECISION`.
 
-### Initial recommendations
+### Locked recommendations
 
-| Question | Initial recommendation |
-|----------|------------------------|
+| Question | Decision |
+|----------|----------|
 | Q1: Dispatch policy | EDF dispatch (no admission control, no overrun isolation); documentation must not claim "EDF" without the "dispatch" qualifier |
 | Q2: `SchedulingExecutor` conformance | Conform; override `asSchedulingExecutor` to `self`; track PR #2654 rename |
 | Q3: Clock generality | Two hardcoded clocks (`ContinuousClock` + `SuspendingClock`) for v1; generic-over-`some Clock` deferred pending spike |
@@ -485,35 +485,150 @@ the policy for hard ones. We are in the soft-deadline regime.
    `priority-escalation-policy.md` already resolved as "executors do not
    track priority in v1."
 
+### Locked rename-migration strategy (2026-04-16)
+
+PR #2654 renames `SchedulingExecutor` → `SchedulableExecutor`. The
+protocol is currently absent from the macOS 26.4 SDK `.swiftinterface`
+(SDK finding, above), so no conformance ships today. When the protocol
+ships — whether under the current name or the renamed one — the
+conformance lands behind a **compiler-version gate**, not a runtime
+gate. Locked idiom:
+
+```swift
+#if compiler(>=6.4) && hasFeature(SchedulableExecutor)
+extension Executor.Scheduled: SchedulableExecutor {
+    public func enqueue(
+        _ job: consuming ExecutorJob,
+        at instant: ContinuousClock.Instant,
+        tolerance: ContinuousClock.Duration? = nil,
+        clock: ContinuousClock
+    ) { ... }
+
+    public func asSchedulingExecutor() -> (any SchedulingExecutor)? { self }
+}
+#elseif compiler(>=6.3) && hasFeature(SchedulingExecutor)
+extension Executor.Scheduled: SchedulingExecutor {
+    public func enqueue(
+        _ job: consuming ExecutorJob,
+        at instant: ContinuousClock.Instant,
+        tolerance: ContinuousClock.Duration? = nil,
+        clock: ContinuousClock
+    ) { ... }
+
+    public func asSchedulingExecutor() -> (any SchedulingExecutor)? { self }
+}
+#endif
+```
+
+**Rationale.**
+
+- **`hasFeature` + `compiler` double-gate:** the `hasFeature` check
+  responds to the actual stdlib surface (feature flag present iff the
+  protocol ships); the `compiler` floor prevents parser errors on
+  older toolchains where the feature flag name itself is unrecognized.
+  Matches the pattern stdlib uses for SE-gated APIs
+  (e.g., `hasFeature(NonescapableTypes)`).
+- **Two arms rather than one fallback:** when the rename lands in 6.4,
+  6.3 clients still need the old-name conformance to remain valid on
+  6.3 toolchains. The two `#elseif`-separated arms keep both working
+  until the 6.3 support window closes.
+- **No runtime typealias:** a `public typealias SchedulingExecutor = SchedulableExecutor`
+  at the swift-executors layer would shadow the stdlib protocol and
+  produce confusing diagnostics ("two types named …"). Source migration
+  is a compile-time concern and belongs in compile-time conditionals.
+- **Feature-flag names TBD:** the concrete `hasFeature(…)` spelling
+  depends on the feature flag(s) Apple ships with the protocol. The
+  sample above uses the protocol names as placeholders. Pattern
+  validated against `Synchronization.Mutex`'s feature gating
+  (`hasFeature(SuppressedAssociatedTypes)`); the exact spelling is
+  recorded once the protocol lands in a tagged SDK.
+
+**When to act.**
+
+The conformance (and this gating idiom) land in a follow-up commit
+when the protocol ships in the `.swiftinterface`. The research note
+reaches DECISION with the idiom locked; implementation timing depends
+on SDK evolution, not on this note.
+
+### Validated by spike (2026-04-16)
+
+`Experiments/scheduled-two-clock-spike/` — 4 variants, ALL PASS on
+Apple Swift 6.3 / macOS 26 arm64:
+
+- **V1 (single-clock baseline):** One `ContinuousClock` timer thread
+  fires a 50 ms-deadline job within ~60 ms; shutdown clean. Confirms
+  the harness.
+- **V2 (two-clock parallel drain):** Two timer threads drain their
+  own heaps in FIFO order; neither thread fires the other's jobs.
+  `continuous=[10, 11] suspending=[20, 21]` confirms heap isolation.
+- **V3 (shutdown race, both parked):** Both timer threads parked on
+  `pthread_cond_timedwait` with 60-second future deadlines. Shutdown
+  flag + broadcast on both condvars unblocks both in < 1 ms; neither
+  far-future job fires. Confirms shared-flag + per-condvar-broadcast
+  pattern is correct and race-free.
+- **V4 (many-pending shutdown):** 100 pending jobs across both clocks
+  at shutdown time. Shutdown completes in < 1 ms; no deadlock.
+
+**Finding: no generic-over-Clock unification in v1.** The spike
+initially modelled the timer as `PerClockTimer<C: Clock>`; Swift 6.3's
+`SendNonSendable` SIL pass crashes when a generic class is referenced
+from a `@convention(c)` pthread entry closure. The production
+implementation must either (a) keep `Executor.Scheduled`'s timer
+class non-generic and carry two concrete timer classes (duplication
+acceptable at the spike scale, manageable at production scale), or
+(b) emit the pthread entry function outside the generic class body.
+Option B matches the idiom already used in `Kernel.Thread.trap(...)`
+callers, which pass a retained pointer into a non-generic thread
+entry. No ABI-level blocker.
+
+**Finding: `clock_gettime(CLOCK_REALTIME)` + duration delta is
+sufficient** for deadline conversion into `pthread_cond_timedwait`'s
+timespec on both clocks. SuspendingClock does not suspend the process
+in this harness (device is not put to sleep during the spike), so the
+CLOCK_REALTIME-relative wait is equivalent to the CLOCK_MONOTONIC-
+relative wait a production implementation might use via
+`pthread_condattr_setclock(CLOCK_MONOTONIC)`. Production code should
+prefer a monotonic clock for the wait to avoid wall-clock-jump
+surprises.
+
 ### Next steps before promotion to DECISION
 
-1. **Prototype the two-clock split** in a spike under
-   `Experiments/scheduled-two-clock-spike/`. Validate that two timer
-   threads (one `ContinuousClock`, one `SuspendingClock`) share the
-   shutdown flag correctly and do not deadlock on combined drain under
-   shutdown race.
-2. **Update `Executor.Job.Priority.Entry`** at
-   `swift-executor-primitives` to carry a monotonic `UInt64` sequence
-   number. L1 ABI change; coordinate with the
-   `executor-primitives-modularization-review` discipline.
+1. ~~**Prototype the two-clock split**~~ **DONE** (2026-04-16) — see
+   "Validated by spike" subsection above. 4 variants ALL PASS; shared
+   shutdown flag + per-clock condvar broadcast pattern confirmed
+   race-free and deadlock-free; shutdown unblocks both parked threads
+   in < 1 ms. Generic-over-Clock unification blocked by a Swift 6.3
+   compiler crash in the `SendNonSendable` SIL pass; production can
+   work around by emitting the pthread entry function outside the
+   generic class body.
+2. ~~**Update `Executor.Job.Priority.Entry`**~~ **DONE** (2026-04-16) —
+   `swift-executor-primitives` Entry now carries a monotonic
+   `UInt64 sequence`; `Priority.schedule(_:at:)` increments a
+   per-queue `_nextSequence` counter inside the caller's lock; the
+   `Comparison` conformance breaks ties by sequence. Three new FIFO
+   ordering tests added to `Executor.Job.Priority Tests.swift`
+   (28/28 pass at L1).
 3. **Draft the `SchedulingExecutor` conformance** for
-   `Executor.Scheduled`. Confirm single-method implementation (the
-   `enqueue(..., at instant:, ...)` overload) and that the default
-   `after:` cross-dispatch works. Add the `asSchedulingExecutor ->
-   self` override.
-4. **Lock the rename-migration strategy.** When PR #2654 merges and
-   renames to `SchedulableExecutor`, `Executor.Scheduled` will need a
-   compatibility typealias or a version-gated extension. Record the
-   chosen migration idiom here once PR #2654 converges.
-5. **Coordinate with `priority-escalation-policy.md`** (already done in
-   principle — that doc defers the priority-tiebreak question here; we
-   defer it back to v2). Mutual-defer is correct given both docs rule
-   out priority-keyed scheduling for v1.
-6. **Coordinate with `embedded-swift-scoping.md`** — verify
-   `SchedulingExecutor` has an Embedded story. The protocol is guarded
-   by `!$Embedded` in its internal `enqueue` overloads
-   (`Executor.swift:66, 109, 187, 211` [Verified: 2026-04-16]); our
-   conformance must match.
+   `Executor.Scheduled`. Blocked by the SDK finding below — the
+   protocol is absent from macOS 26.4 SDK `.swiftinterface`, so no
+   conformance ships today. The conformance template is locked in
+   "Locked rename-migration strategy" above; implementation is a
+   one-commit follow-up when the SDK gate lifts.
+4. ~~**Lock the rename-migration strategy.**~~ **DONE** (2026-04-16) —
+   see "Locked rename-migration strategy" subsection above.
+   Double-gated `hasFeature` + `compiler` conditional idiom with
+   separate arms for pre- and post-rename protocol names.
+5. ~~**Coordinate with `priority-escalation-policy.md`**~~ **DONE** —
+   mutual-defer recorded in both notes (both rule out priority-keyed
+   scheduling for v1).
+6. ~~**Coordinate with `embedded-swift-scoping.md`**~~ **DONE** — that
+   note's verdict for `Scheduled` is NO (ContinuousClock unavailable);
+   `SchedulingExecutor` conformance is inherently `#if !$Embedded`
+   because the protocol's generic `enqueue<C: Clock>` overloads are
+   stdlib-gated behind `!$Embedded` (`Executor.swift:66, 109, 187, 211`
+   [Verified: 2026-04-16]). The `hasFeature` gate recorded above
+   subsumes the Embedded gate because neither the feature nor the
+   protocol will be present under `$Embedded`.
 
 ### Review findings (2026-04-16, post peer review)
 

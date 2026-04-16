@@ -2,9 +2,9 @@
 
 <!--
 ---
-version: 0.4.0
+version: 0.6.0
 last_updated: 2026-04-16
-status: IN_PROGRESS
+status: DECISION
 tier: 2
 ---
 -->
@@ -612,9 +612,9 @@ executors.
 
 ## Outcome
 
-**Status:** `IN_PROGRESS`.
+**Status:** `DECISION`.
 
-### Initial recommendations
+### Locked recommendations
 
 | Executor | Mechanism | Platform | Default |
 |----------|-----------|:---:|:---:|
@@ -672,35 +672,124 @@ construction.
 at the Swift bridge; for valid threads and QoS classes, failure is not
 expected. Production code should not nil-check.
 
+### Locked surface (2026-04-16)
+
+The v1 opt-in flag is **`priorityTracking: Bool`**, default **`false`**,
+exposed as a stored property on each thread-owning executor's `Options`
+struct. Locked across `Kernel.Thread.Executor.{Sharded,Stealing}.Options`;
+`Kernel.Thread.Executor.Polling` currently constructs via direct
+parameters, so the flag lands as an init parameter with the same name,
+type, and default until a `Polling.Options` struct is introduced.
+
+```swift
+// Sharded and Stealing
+public struct Options: Sendable {
+    public var count: Kernel.Thread.Count
+    public var priorityTracking: Bool = false
+    public init(count: Kernel.Thread.Count? = nil, priorityTracking: Bool = false)
+}
+
+// Polling (no Options struct yet)
+public init(
+    source: consuming Kernel.Event.Source,
+    maxEventsPerPoll: Int = 256,
+    priorityTracking: Bool = false,
+    tick: sending @escaping ... -> Outcome
+)
+```
+
+**Semantics (all platforms).** When `priorityTracking` is `true`:
+
+1. On Darwin, each worker thread brackets job execution with
+   `pthread_override_qos_class_start_np(thread, qos, 0)` at job-start
+   and `pthread_override_qos_class_end_np(override)` at job-end, where
+   `qos` is derived from the job's `ExecutorJob.priority` mapped to
+   `qos_class_t` via the `TaskPriority.qosClass` translation.
+2. On Linux, Windows, FreeBSD: **no-op**. The flag compiles to nothing.
+   Setting it is not an error — the documented contract is "no effect
+   outside Darwin."
+3. On Embedded: **no-op** (no QoS concept; see `embedded-swift-scoping.md`).
+
+**Documentation tone requirement.** DocC on `priorityTracking` MUST
+state "Darwin-only" in the summary line and MUST NOT use language
+implying cross-platform support. A concrete template:
+
+> /// Enables per-job thread-QoS tracking on Darwin.
+> ///
+> /// When `true`, each worker thread's QoS class is bumped to match the
+> /// current job's priority for the duration of job execution via
+> /// `pthread_override_qos_class_start_np`, then reverted at job-end.
+> /// This is the M3 mechanism of the priority-inversion policy
+> /// (`Research/priority-escalation-policy.md`); it implements the PIP
+> /// bound for the running job.
+> ///
+> /// **No-op on Linux, Windows, and Embedded.** These platforms lack
+> /// an unprivileged QoS primitive equivalent to Darwin's pthread
+> /// override API. The flag is accepted for source-compatibility but
+> /// produces no runtime effect. See `priority-escalation-policy.md`
+> /// for the cross-platform story.
+> ///
+> /// Default: `false` for v1. Will default to `true` on Darwin in v2
+> /// once the override lifecycle is validated in production.
+
+**Rationale for the surface.**
+
+- Single `Bool` rather than a `PriorityTrackingPolicy` enum: the
+  mechanism space collapsed to {off, M3} after rejecting M1/M2/M4.
+  An enum would advertise choices that do not exist.
+- `Options`-level rather than per-enqueue: per-enqueue control would
+  require the executor to branch on each job, re-reading the flag; the
+  Options field lets construction-time branching produce a specialized
+  drain path.
+- Shared name across executors: one mental model, one audit site. A
+  future v2 that adds per-executor policies can diverge at that point.
+- `priorityTracking` (not `priorityInversion` or `qosTracking`): the
+  mechanism is broader than just inversion mitigation (it also tracks
+  escalation from `Task.escalatePriority`); "tracking" captures both.
+
 ### Next steps before promotion to DECISION
 
-1. **Lock the `Options.priorityTracking` flag surface** across
-   `Kernel.Thread.Executor.{Polling,Sharded,Stealing}.Options`. Flag name,
-   default, and documentation tone (must not imply Linux support).
+1. ~~**Lock the `Options.priorityTracking` flag surface.**~~ **DONE** —
+   see "Locked surface" subsection above. Flag name, type, default,
+   per-platform no-op contract, and documentation template all recorded.
 2. ~~**Prototype the Darwin M3 path.**~~ **DONE** —
    `Experiments/priority-override-spike/` CONFIRMED on Swift 6.3 / macOS
    26 arm64. Nesting, sub-µs cost, and cross-thread non-wake all
    validated. Linux null-op behavior needs no spike.
-3. **Coordinate with `work-stealing-scheduler-design.md`** on the
-   interaction between QoS override and the spin→yield→park idle policy
-   (Q3 in that document). Confirmed by V3 above: a parked worker is not
-   woken by the override; the wakeup primitive remains separate.
-   Document in both places.
+3. ~~**Coordinate with `work-stealing-scheduler-design.md`**~~ **DONE** —
+   that DECISION-status note's Q3 (idle policy) is orthogonal to M3:
+   spike V3 confirmed a parked worker is NOT woken by a QoS override,
+   so the wakeup primitive in Q3 remains the sole wake channel. No
+   amendment required; the cross-reference lives in this note only,
+   matching the mutual-defer pattern with `scheduled-executor-policy`.
 4. ~~**Coordinate with `scheduled-executor-policy.md`**~~ **DONE** —
    that note rejects `TaskPriority` as a secondary key for v1, matching
    our "no priority tracking in v1" recommendation. Mutual-defer
    recorded.
-5. **Coordinate with `cooperative-donation-contract.md`** on declaring
-   priority as "caller-owned" for Cooperative.
+5. ~~**Coordinate with `cooperative-donation-contract.md`**~~ **DONE** —
+   that DECISION-status note states "caller-owned priority" as part of
+   the donation contract (the caller's thread runs jobs at its own QoS,
+   not an executor-managed one). M3 does not apply to Cooperative
+   because the thread is not ours to bracket. Cross-reference lives in
+   Cooperative's analysis section ("`Executor.Cooperative.runUntil`")
+   below; no amendment to the DECISION note required.
 6. **Resolve the Linux thread-QoS story for v2** (not v1). Candidate
    mechanism: probe `CAP_SYS_NICE` at executor construction; enable M3
-   only when the capability is present. Out of scope for v1.
+   only when the capability is present. Out of scope for v1 —
+   implementation deferred, not blocking DECISION.
 7. **Flip `Options.priorityTracking` default to `true` on Darwin in
    v2.** The v1 default is `false` because the override lifecycle code
    is new. Once validated in production, v2 should default to `true` on
    Darwin (where the mechanism is cheap and unprivileged) and `false`
    elsewhere. Users who want Darwin priority-inversion mitigation in v1
-   must set `Options.priorityTracking = true` explicitly.
+   must set `Options.priorityTracking = true` explicitly. Deferred to
+   v2 — not blocking DECISION.
+8. **Implement the bracketed QoS override at the drain path.** Not
+   blocking DECISION because the surface is locked and the mechanism
+   is spike-validated. Implementation is a downstream follow-up:
+   introduce `Polling.Options` (or keep the init parameter), propagate
+   `priorityTracking` through the worker loop, and gate the
+   `pthread_override_*` calls behind `#if canImport(Darwin)`.
 
 ### Escalation note
 

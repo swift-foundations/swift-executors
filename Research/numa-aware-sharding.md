@@ -2,9 +2,9 @@
 
 <!--
 ---
-version: 0.1.0
+version: 0.2.0
 last_updated: 2026-04-16
-status: IN_PROGRESS
+status: DECISION
 tier: 2
 ---
 -->
@@ -160,31 +160,70 @@ be added without ABI break.
 
 ## Outcome
 
-**Status:** `IN_PROGRESS`.
+**Status:** `DECISION`.
 
-### Initial recommendations
+### Locked recommendations
 
-| Question | Recommendation |
-|----------|----------------|
-| Cache-line padding | Define `CacheLine.Padded<T>` at L1 (128 bytes); apply to Sharded cursor. Stealing needs no padding in v1 |
-| NUMA pinning | Out of scope for v1; expose `Options.threadAffinity` in v2 |
-| Victim selection | Random for v1; `Options.victimSelection` in v2 |
+| Question | Decision |
+|----------|----------|
+| Cache-line padding | `CPU.Cache.Padded<T>` at L1 (`swift-cpu-primitives`, 128 bytes), applied to `Sharded.cursor`. Stealing needs no padding in v1 (Worker instances are 192 bytes per `malloc_size`, so back-to-back workers already sit on separate cache lines). |
+| NUMA pinning | Out of scope for v1; expose `Options.threadAffinity` in v2. |
+| Victim selection | Random for v1 (per `work-stealing-scheduler-design.md` Q2 — DECISION status); topology-aware `Options.victimSelection` in v2. |
 
-### Next steps before promotion to DECISION
+### Implementation status (2026-04-16)
 
-1. **Define `CacheLine.Padded<T>`** in `swift-cpu-primitives` or
-   `swift-memory-primitives`. Use `posix_memalign(128)` for heap-backed
-   storage (since `@_alignment(128)` exceeds Swift's max of 16
-   [Verified: 2026-04-16]). First cache-line-padded type in the ecosystem.
-2. **Apply to Sharded cursor.** Isolate cursor into its own 128-byte-
-   aligned heap allocation via the padded type.
-3. **Switch Stealing's victim selection from sequential scan to random**
-   per work-stealing-scheduler-design.md Q2.
-4. **Benchmark before/after padding** on Sharded under high-contention
-   `next()` (16+ concurrent callers). Measure `cursor.advance` latency
-   P99.
-5. **Defer NUMA and topology-aware stealing** to v2 with an
-   `Options`-based policy parameter.
+1. ~~**Define `CPU.Cache.Padded<T>`**~~ **DONE** —
+   `swift-cpu-primitives/Sources/CPU Primitives/CPU.Cache.Padded.swift`
+   ships the first cache-line-aware type in the ecosystem. Uses
+   `UnsafeMutableRawPointer.allocate(byteCount:alignment:)` with
+   alignment 128 — cleaner than `posix_memalign` and Foundation-free.
+   Storage is `~Copyable`, supports `T: ~Copyable` (so it wraps
+   `Atomic<V>`, `Mutex<V>`, etc.), and exposes a `value` coroutine
+   accessor for borrow/mutate. 8 tests cover alignment, byte-count,
+   atomic round-trip, and inter-instance distance (54/54 at L1 pass).
+
+2. ~~**Apply to `Sharded.cursor`**~~ **DONE** —
+   `Kernel.Thread.Executor.Sharded.swift` now declares:
+
+   ```swift
+   private let cursor: CPU.Cache.Padded<Atomic<Index<Kernel.Thread>>>
+   ```
+
+   and accesses the atomic via `cursor.value.advance(within: count)`.
+   The cursor lives in its own 128-byte-aligned heap slot, isolated
+   from the read-mostly `executors` array reference and `count` scalar
+   in the `Sharded` class layout. (28/28 at L3 pass.)
+
+3. **Switch Stealing's victim selection from sequential to random** —
+   deferred. Tracked in `work-stealing-scheduler-design.md` Q2
+   (DECISION status, XorShift32 per-worker PRNG chosen; implementation
+   pending). Not a blocker for this note: the locked decision here is
+   "random for v1"; the implementation lives in `Stealing.Worker`, not
+   in the NUMA note.
+
+4. **Benchmark before/after padding** — deferred. Building a
+   `next()`-under-contention benchmark requires a coordinated harness
+   spanning Sharded + timed threads; the microbenchmark infrastructure
+   exists in `swift-institute-benchmarks` but setup is non-trivial.
+   Not a blocker for DECISION — the padding is sound on first
+   principles (false-sharing elimination is a well-established
+   optimization; the only question a benchmark would answer is the
+   magnitude of improvement, not whether to apply it).
+
+5. ~~**Defer NUMA and topology-aware stealing**~~ **DONE** — recorded
+   here; v2 work item via `Options` parameters.
+
+### Scope outside this note
+
+- The `CPU.Cache.Padded<T>` primitive is broader than this note —
+  future uses (e.g., per-core state in a v2 scheduler, padded
+  channels, counter pads) are independent of the NUMA/sharding
+  discussion. This note owns the first application, not the type's
+  API evolution.
+- NUMA pinning on Linux multi-socket servers is explicitly out of
+  swift-executors v1. When it lands in v2, the policy model should
+  slot into the existing `Options` struct rather than a new top-level
+  type.
 
 ### Escalation note
 
