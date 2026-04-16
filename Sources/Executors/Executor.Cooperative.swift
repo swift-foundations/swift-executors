@@ -67,6 +67,7 @@ extension Executor {
     public final class Cooperative: SerialExecutor, @unsafe @unchecked Sendable {
         private var jobs: Executor.Job.Queue
         private var drainBuffer: Executor.Job.Queue
+        private var scheduled: Executor.Job.Priority
         private let wait: Executor.Wait.Condvar
         private let _shutdown: Executor.Shutdown.Flag
         /// Lock-protected by `wait`. Written by `stop()`, reset at `runUntil` entry.
@@ -77,6 +78,7 @@ extension Executor {
         public init() {
             self.jobs = .init()
             self.drainBuffer = .init()
+            self.scheduled = .init()
             self.wait = .init()
             self._shutdown = .init()
             self._stopped = false
@@ -99,6 +101,30 @@ extension Executor.Cooperative {
 
     public func asUnownedSerialExecutor() -> UnownedSerialExecutor {
         unsafe UnownedSerialExecutor(ordinary: self)
+    }
+}
+
+// MARK: - Scheduled Enqueue
+
+extension Executor.Cooperative {
+    /// Schedule a job for execution at a future deadline.
+    ///
+    /// The job is placed into the internal priority queue. The donated
+    /// thread's drain loop wakes on the deadline via timed condvar wait,
+    /// then moves the job to the immediate queue for execution.
+    ///
+    /// When `SchedulingExecutor` ships in the SDK (absent as of macOS
+    /// 26.4 — protocol exists in stdlib source but not in the
+    /// `.swiftinterface`), this method's signature matches the protocol
+    /// requirement; conformance is a one-line addition.
+    public func enqueue(
+        _ job: consuming ExecutorJob,
+        after delay: Duration
+    ) {
+        let deadline = ContinuousClock.now.advanced(by: delay)
+        let unowned = UnownedJob(job)
+        wait.withLock { scheduled.schedule(unowned, at: deadline) }
+        wait.wake()
     }
 }
 
@@ -134,8 +160,23 @@ extension Executor.Cooperative {
             if condition() { return }
 
             let shouldExit = wait.withLock { () -> Bool in
+                // Move ready scheduled jobs into the immediate queue
+                scheduled.drain(now: .now) { jobs.enqueue($0) }
+
+                // Wait until: immediate jobs available, next deadline fires,
+                // stopped, or shutdown
                 while jobs.isEmpty && !_shutdown.isSet && !_stopped {
-                    wait.wait()
+                    if let nextDeadline = scheduled.peek {
+                        let remaining = ContinuousClock.now.duration(to: nextDeadline)
+                        if remaining <= .zero {
+                            scheduled.drain(now: .now) { jobs.enqueue($0) }
+                            continue
+                        }
+                        _ = wait.wait(timeout: remaining)
+                        scheduled.drain(now: .now) { jobs.enqueue($0) }
+                    } else {
+                        wait.wait()
+                    }
                 }
                 if _stopped || _shutdown.isSet { return true }
                 swap(&jobs, &drainBuffer)

@@ -279,6 +279,24 @@ extension Executor.Cooperative: RunLoopExecutor { ... }
 This isolates the SPI exposure to a single extension. If the SPI
 stabilizes (PR #2654 trajectory), the `@_spi` annotation is removed.
 
+**Implementation finding (2026-04-16):** Option A is architecturally
+correct but platform-blocked. The SDK's `.swiftinterface` for
+`_Concurrency` strips `@_spi(ExperimentalCustomExecutors)` symbols
+entirely. `@_spi(ExperimentalCustomExecutors) import _Concurrency`
+compiles but produces a warning: *"'@_spi' import of '_Concurrency'
+will not include any SPI symbols; '_Concurrency' was built from the
+public interface."* `RunLoopExecutor` is then unresolvable — the
+conformance cannot compile from any external package, regardless of
+import strategy.
+
+**Effective status: Option C** (methods without formal conformance) is
+the v1 reality. `run()`, `runUntil(_:)`, and `stop()` are implemented
+with matching signatures. The runtime's `as? RunLoopExecutor` cast
+(`ExecutorImpl.swift:45`) will fail for our executor until the protocol
+stabilizes to public. Conformance is a one-line addition
+(`extension Executor.Cooperative: RunLoopExecutor {}`) when the gate
+lifts. Track via PR #2654 trajectory.
+
 ### Cross-cutting: Embedded variant
 
 Per `embedded-swift-scoping.md`, Embedded Cooperative is
@@ -383,9 +401,16 @@ Document as: "Assumed runtime invariant: verify per Swift release."
    symbols. External packages cannot conform to `RunLoopExecutor` until
    the protocol stabilizes to public. Methods (`run`, `runUntil`, `stop`)
    implemented with matching signatures; conformance deferred.
-3. **Add `SchedulingExecutor` conformance** (Q6), incorporating
+3. ~~**Add `SchedulingExecutor` conformance** (Q6), incorporating
    `Executor.Job.Priority` for deadline-ordered waits in the donated
-   thread. Gate `#if !$Embedded`.
+   thread.~~ **PARTIALLY DONE** — `Executor.Job.Priority` integrated into
+   `runUntil` drain loop (timed condvar waits on next deadline).
+   `enqueue(_:after:)` implemented as concrete method matching
+   `SchedulingExecutor`'s signature. Formal conformance BLOCKED:
+   `SchedulingExecutor` is absent from macOS 26.4 SDK `.swiftinterface`
+   (exists in stdlib source at `Executor.swift:64` but not shipped).
+   Same root cause as RunLoopExecutor — protocol source ≠ protocol in
+   SDK. Conformance is a one-line addition when the protocol ships.
 4. **Mirror changes to `Executor.Main` non-Darwin path.** Factor shared
    drain logic if the duplication becomes three or more methods.
 5. ~~**Write tests.**~~ **DONE** — 7 tests in `Executor.Cooperative Tests.swift`:
