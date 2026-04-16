@@ -36,7 +36,7 @@ extension Kernel.Thread.Executor {
     /// let executor = pool.next()
     /// // Use executor for task dispatch or actor pinning
     /// ```
-    public final class Sharded: @unchecked Sendable {
+    public final class Sharded: Sendable {
         private let executors: [Kernel.Thread.Executor]
         public let count: Kernel.Thread.Count
         // WHY: `cursor` is placed in its own 128-byte-aligned heap slot via
