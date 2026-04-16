@@ -231,6 +231,17 @@ Embedded." No additional guard needed — M3 is already platform-gated.
 5. **Track stdlib Embedded concurrency stabilization** — no SE
    proposal exists yet. When one arrives, re-evaluate all verdicts.
 
+### SDK interface finding (2026-04-16)
+
+`SchedulingExecutor`, `RunLoopExecutor`, and `MainExecutor` are absent
+from the macOS 26.4 SDK `.swiftinterface`. Only `Executor`,
+`SerialExecutor`, and `TaskExecutor` ship. The protocols exist in
+stdlib source but are not included in the compiled binary interface.
+This means the `#if !$Embedded` gating discussion for
+`SchedulingExecutor` is moot for v1: external packages cannot conform
+to the protocol regardless of Embedded status. When the protocol
+ships in the SDK, the Embedded gating applies as analyzed above.
+
 ### Escalation note
 
 Per [RES-004b]: this analysis touches `swift-executor-primitives` (L1)

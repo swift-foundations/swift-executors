@@ -333,6 +333,18 @@ version-gated extension; this is not an ABI-stable crystallization risk.
 Override `asSchedulingExecutor` to `self` per the documented fast-path
 convention, avoiding the runtime cast.
 
+**Implementation finding (2026-04-16):** `SchedulingExecutor` is absent
+from the macOS 26.4 SDK `.swiftinterface` — only `Executor`,
+`SerialExecutor`, and `TaskExecutor` ship. The protocol exists in stdlib
+source (`Executor.swift:64`) but is not included in the compiled binary
+interface. Same root cause affects `RunLoopExecutor` and
+`MainExecutor`. External packages cannot conform until the protocol
+ships. Concrete `enqueue(_:after:)` methods matching the protocol
+signature are implemented on `Executor.Cooperative` and
+`Executor.Main` (non-Darwin); formal conformance is a one-line addition
+when the gate lifts. This finding does NOT change the recommendation
+(still A — conform) but defers the implementation timeline.
+
 ### Q3: Clock generality
 
 | Option | Description | Cost |

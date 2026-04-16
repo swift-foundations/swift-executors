@@ -4,7 +4,7 @@
 ---
 version: 0.1.0
 last_updated: 2026-04-16
-status: IN_PROGRESS
+status: DECISION
 tier: 2
 ---
 -->
@@ -323,9 +323,9 @@ factored out) in `Main`'s non-Darwin path.
 
 ## Outcome
 
-**Status:** `IN_PROGRESS`.
+**Status:** `DECISION`.
 
-### Initial recommendations
+### Locked recommendations
 
 | Question | Recommendation |
 |----------|----------------|
@@ -411,8 +411,11 @@ Document as: "Assumed runtime invariant: verify per Swift release."
    (exists in stdlib source at `Executor.swift:64` but not shipped).
    Same root cause as RunLoopExecutor — protocol source ≠ protocol in
    SDK. Conformance is a one-line addition when the protocol ships.
-4. **Mirror changes to `Executor.Main` non-Darwin path.** Factor shared
-   drain logic if the duplication becomes three or more methods.
+4. ~~**Mirror changes to `Executor.Main` non-Darwin path.**~~ **DONE** —
+   `Executor.Main.swift` non-Darwin path now has `runUntil`, `stop()`,
+   `enqueue(_:after:)`, snapshot-drain with scheduled integration.
+   Duplication is two types (Cooperative + Main non-Darwin); factoring
+   deferred until a third consumer emerges.
 5. ~~**Write tests.**~~ **DONE** — 7 tests in `Executor.Cooperative Tests.swift`:
    create-and-shutdown, stop-without-run, runUntil-immediate-return,
    run-returns-on-shutdown, stop-causes-run-to-return,

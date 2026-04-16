@@ -49,15 +49,23 @@ extension Executor {
     public final class Main: SerialExecutor, @unsafe @unchecked Sendable {
         #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
         private var jobs: Executor.Job.Queue
+        private var drainBuffer: Executor.Job.Queue
+        private var scheduled: Executor.Job.Priority
         private let wait: Executor.Wait.Condvar
         private let _shutdown: Executor.Shutdown.Flag
+        private var _stopped: Bool
+        private var _isRunning: Bool
         #endif
 
         private init() {
             #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
             self.jobs = .init()
+            self.drainBuffer = .init()
+            self.scheduled = .init()
             self.wait = .init()
             self._shutdown = .init()
+            self._stopped = false
+            self._isRunning = false
             #endif
         }
     }
@@ -96,21 +104,80 @@ extension Executor.Main {
 
 #if !(os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(visionOS))
 extension Executor.Main {
-    /// Drive the main pump on the calling thread. Blocks until `shutdown()`.
+    /// Drive the main pump on the calling thread.
+    ///
+    /// Blocks until `shutdown()` or `stop()` is called. Same donation
+    /// contract as `Executor.Cooperative` — see that type's docstring.
     ///
     /// - Important: Must be called from the main thread.
     public func run() {
+        runUntil { false }
+    }
+
+    /// Drive the main pump until a condition is satisfied.
+    ///
+    /// Same snapshot-then-check drain as `Executor.Cooperative.runUntil`.
+    ///
+    /// - Precondition: Must not be called while another `run()` or
+    ///   `runUntil` is active (re-entrancy prohibited).
+    public func runUntil(_ condition: () -> Bool) {
+        precondition(!_isRunning, "nested runUntil is not supported")
+        _isRunning = true
+        wait.withLock { _stopped = false }
+        defer { _isRunning = false }
+
         while !_shutdown.isSet {
-            let job: UnownedJob? = wait.withLock {
-                while jobs.isEmpty && !_shutdown.isSet { wait.wait() }
-                return jobs.dequeue()
+            if condition() { return }
+
+            let shouldExit = wait.withLock { () -> Bool in
+                scheduled.drain(now: .now) { jobs.enqueue($0) }
+
+                while jobs.isEmpty && !_shutdown.isSet && !_stopped {
+                    if let nextDeadline = scheduled.peek {
+                        let remaining = ContinuousClock.now.duration(to: nextDeadline)
+                        if remaining <= .zero {
+                            scheduled.drain(now: .now) { jobs.enqueue($0) }
+                            continue
+                        }
+                        _ = wait.wait(timeout: remaining)
+                        scheduled.drain(now: .now) { jobs.enqueue($0) }
+                    } else {
+                        wait.wait()
+                    }
+                }
+                if _stopped || _shutdown.isSet { return true }
+                swap(&jobs, &drainBuffer)
+                return false
             }
-            guard let job else { return }
-            unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+
+            if shouldExit { return }
+
+            while let job = drainBuffer.dequeue() {
+                unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+            }
         }
     }
 
-    /// Signal the main pump to exit.
+    /// Signal the innermost `run()` or `runUntil` to return.
+    ///
+    /// Non-destructive: the executor remains usable after `stop()`.
+    public func stop() {
+        wait.withLock { _stopped = true }
+        wait.wake.all()
+    }
+
+    /// Schedule a job for execution at a future deadline.
+    public func enqueue(
+        _ job: consuming ExecutorJob,
+        after delay: Duration
+    ) {
+        let deadline = ContinuousClock.now.advanced(by: delay)
+        let unowned = UnownedJob(job)
+        wait.withLock { scheduled.schedule(unowned, at: deadline) }
+        wait.wake()
+    }
+
+    /// Signal the main pump to exit permanently.
     public func shutdown() {
         _shutdown.set()
         wait.wake.all()
