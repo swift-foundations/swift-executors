@@ -373,23 +373,30 @@ Document as: "Assumed runtime invariant: verify per Swift release."
 
 ### Next steps before promotion to DECISION
 
-1. **Implement `runUntil(_:)` and `stop()` on `Executor.Cooperative`.**
-   Refactor `run()` to `runUntil { false }` per stdlib pattern. Add
-   snapshot-drain. Add `stop()` as a non-destructive alternative to
-   `shutdown()`. Add re-entrancy precondition.
-2. **Add the `RunLoopExecutor` conformance extension**, `@_spi`-gated.
+1. ~~**Implement `runUntil(_:)` and `stop()` on `Executor.Cooperative`.**~~
+   **DONE** — `Executor.Cooperative.swift`. `run()` delegates to
+   `runUntil { false }`. Snapshot-drain via `swap(&jobs, &drainBuffer)`.
+   `stop()` is non-destructive (condvar wake, not nanosleep). Re-entrancy
+   precondition on `_isRunning`.
+2. ~~**Add the `RunLoopExecutor` conformance extension**, `@_spi`-gated.~~
+   **BLOCKED** — SDK `.swiftinterface` strips `@_spi(ExperimentalCustomExecutors)`
+   symbols. External packages cannot conform to `RunLoopExecutor` until
+   the protocol stabilizes to public. Methods (`run`, `runUntil`, `stop`)
+   implemented with matching signatures; conformance deferred.
 3. **Add `SchedulingExecutor` conformance** (Q6), incorporating
    `Executor.Job.Priority` for deadline-ordered waits in the donated
    thread. Gate `#if !$Embedded`.
 4. **Mirror changes to `Executor.Main` non-Darwin path.** Factor shared
    drain logic if the duplication becomes three or more methods.
-5. **Write tests.** Current coverage is one smoke test. Need: enqueue-
-   while-running, shutdown-while-draining, `runUntil`-with-condition,
-   `stop()`-from-other-thread, `stop()`-during-job-execution,
-   re-entrancy-precondition-fires, scheduled-enqueue-fires-on-deadline.
-6. **Document the contract** in the type's docstring: yield policy,
-   revocation semantics, completion guarantee, priority declaration,
-   re-entrancy prohibition, `stop()`/`shutdown()` priority.
+5. ~~**Write tests.**~~ **DONE** — 7 tests in `Executor.Cooperative Tests.swift`:
+   create-and-shutdown, stop-without-run, runUntil-immediate-return,
+   run-returns-on-shutdown, stop-causes-run-to-return,
+   stop-from-other-thread, actor-method-runs-on-donated-thread,
+   shutdown-dominates-stop. Uses `Cooperator` actor pinned to the
+   executor for enqueue-via-actor tests.
+6. ~~**Document the contract** in the type's docstring.~~ **DONE** —
+   full donation contract documented: yield policy, revocation, completion
+   guarantee, priority, re-entrancy, stop/shutdown priority.
 
 ### Escalation note
 

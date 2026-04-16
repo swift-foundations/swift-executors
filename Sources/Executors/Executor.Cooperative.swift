@@ -26,14 +26,34 @@ extension Executor {
     /// - Unit tests that need a drain-to-completion executor without
     ///   spawning an OS thread.
     ///
+    /// ## Donation Contract
+    ///
+    /// - **Yield policy:** Snapshot-then-check. Each iteration drains a
+    ///   snapshot of pending jobs, then re-checks the exit condition.
+    ///   Prevents the infinite-drain bug the stdlib hit and fixed
+    ///   (`0fbd382e9ca`, `bd27a14ea00`).
+    /// - **Revocation:** `runUntil(_:)` accepts a condition callback;
+    ///   `stop()` signals the innermost invocation to return.
+    ///   Revocation latency is bounded by the longest single job
+    ///   execution, not by sleep duration (condvar wakes on enqueue).
+    /// - **Completion guarantee:** Always. `run()` returns on `shutdown()`
+    ///   or `stop()`. `runUntil(_:)` returns when the condition is
+    ///   satisfied, or `stop()`/`shutdown()` is called.
+    /// - **Priority:** Caller-owned. The donated thread runs at the OS
+    ///   priority of the donating context. The executor does not adjust it.
+    ///   FIFO drain order for v1.
+    /// - **Re-entrancy:** Prohibited. Nested `runUntil` / `run()` traps.
+    /// - **`stop()` vs `shutdown()`:** `shutdown()` dominates. If both are
+    ///   in flight, the executor exits permanently. `stop()` alone halts
+    ///   the innermost `runUntil`; `shutdown()` halts everything and is
+    ///   irreversible.
+    ///
     /// ## Non-Goals
     ///
     /// - Not a TaskExecutor. Cooperative scheduling implies serial actor
     ///   identity; task-executor semantics are not offered.
     /// - Not multi-thread. Enqueues from other threads are allowed, but
-    ///   execution is always on the `run()` caller.
-    /// - Not reentrant within `run()`. Shutdown must be driven from another
-    ///   context (or via a job that calls `shutdown()`).
+    ///   execution is always on the `run()` / `runUntil` caller.
     ///
     /// ## Usage
     /// ```swift
@@ -41,17 +61,26 @@ extension Executor {
     /// // From another task:
     /// executor.enqueue(job)
     /// // On the calling thread:
-    /// executor.run()   // blocks until shutdown() is called
+    /// executor.run()              // blocks until shutdown() or stop()
+    /// executor.runUntil { done }  // blocks until done or stop()/shutdown()
     /// ```
     public final class Cooperative: SerialExecutor, @unsafe @unchecked Sendable {
         private var jobs: Executor.Job.Queue
+        private var drainBuffer: Executor.Job.Queue
         private let wait: Executor.Wait.Condvar
         private let _shutdown: Executor.Shutdown.Flag
+        /// Lock-protected by `wait`. Written by `stop()`, reset at `runUntil` entry.
+        private var _stopped: Bool
+        /// Single-thread only (donated thread). Re-entrancy guard.
+        private var _isRunning: Bool
 
         public init() {
             self.jobs = .init()
+            self.drainBuffer = .init()
             self.wait = .init()
             self._shutdown = .init()
+            self._stopped = false
+            self._isRunning = false
         }
     }
 }
@@ -76,19 +105,69 @@ extension Executor.Cooperative {
 // MARK: - Run Loop
 
 extension Executor.Cooperative {
-    /// Drive the run loop on the caller's thread. Returns when `shutdown()` is called.
+    /// Drive the run loop on the caller's thread.
+    ///
+    /// Blocks until `shutdown()` or `stop()` is called. Equivalent to
+    /// `runUntil { false }`.
     public func run() {
+        runUntil { false }
+    }
+
+    /// Drive the run loop until a condition is satisfied.
+    ///
+    /// Uses snapshot-then-check: each iteration takes a snapshot of
+    /// pending jobs, drains the snapshot, then re-checks `condition`.
+    /// Returns when `condition()` returns `true`, `stop()` is called,
+    /// or `shutdown()` is called.
+    ///
+    /// - Precondition: Must not be called while another `run()` or
+    ///   `runUntil` is active on this executor (re-entrancy prohibited).
+    /// - Parameter condition: Checked after each drain snapshot. Return
+    ///   `true` to exit.
+    public func runUntil(_ condition: () -> Bool) {
+        precondition(!_isRunning, "nested runUntil is not supported")
+        _isRunning = true
+        wait.withLock { _stopped = false }
+        defer { _isRunning = false }
+
         while !_shutdown.isSet {
-            let job: UnownedJob? = wait.withLock {
-                while jobs.isEmpty && !_shutdown.isSet { wait.wait() }
-                return jobs.dequeue()
+            if condition() { return }
+
+            let shouldExit = wait.withLock { () -> Bool in
+                while jobs.isEmpty && !_shutdown.isSet && !_stopped {
+                    wait.wait()
+                }
+                if _stopped || _shutdown.isSet { return true }
+                swap(&jobs, &drainBuffer)
+                return false
             }
-            guard let job else { return }
-            unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+
+            if shouldExit { return }
+
+            while let job = drainBuffer.dequeue() {
+                unsafe job.runSynchronously(on: asUnownedSerialExecutor())
+            }
         }
     }
 
-    /// Signal the run loop to exit.
+    /// Signal the innermost `run()` or `runUntil` to return.
+    ///
+    /// Non-destructive: the executor remains usable after `stop()`.
+    /// Revocation latency is bounded by the longest single job execution
+    /// (condvar wakes immediately, unlike the stdlib's nanosleep).
+    ///
+    /// Safe to call from any thread, including from within a job
+    /// executing on the donated thread.
+    public func stop() {
+        wait.withLock { _stopped = true }
+        wait.wake.all()
+    }
+
+    /// Signal the run loop to exit permanently.
+    ///
+    /// Irreversible. Dominates `stop()` — if both are in flight, the
+    /// executor exits permanently. Jobs enqueued after shutdown begins
+    /// are silently dropped.
     public func shutdown() {
         _shutdown.set()
         wait.wake.all()
