@@ -73,6 +73,39 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
 }
 
 
+// MARK: - Isolation Verification
+
+extension Kernel.Thread.Executor.Sharded.Test.Unit {
+    @Test("isIsolatingCurrentContext returns false from non-shard thread")
+    func isolationFromNonShardThread() {
+        let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
+        #expect(pool.isIsolatingCurrentContext() == false)
+        pool.shutdown()
+    }
+
+    @Test("isIsolatingCurrentContext returns true from shard thread")
+    func isolationFromShardThread() async {
+        let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
+        let shard = pool.next()
+
+        let result = await Task(executorPreference: shard) {
+            pool.isIsolatingCurrentContext()
+        }.value
+
+        #expect(result == true)
+        pool.shutdown()
+    }
+
+    @Test("isIsolatingCurrentContext returns false after shutdown")
+    func isolationAfterShutdown() {
+        let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
+        pool.shutdown()
+        #expect(pool.isIsolatingCurrentContext() == false)
+    }
+}
+
+// MARK: - Integration Tests
+
 extension Kernel.Thread.Executor.Sharded.Test.Integration {
     @Test("round-robin distributes across executors")
     func roundRobinDistribution() {

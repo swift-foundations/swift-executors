@@ -1,0 +1,233 @@
+# NUMA-Aware Sharding
+
+<!--
+---
+version: 0.1.0
+last_updated: 2026-04-16
+status: IN_PROGRESS
+tier: 2
+---
+-->
+
+## Context
+
+`Kernel.Thread.Executor.Sharded` and `Kernel.Thread.Executor.Stealing`
+both manage N worker threads with per-worker state (queues, condvars,
+atomics). Neither has cache-line padding, thread-to-core affinity, or
+NUMA topology awareness. `work-stealing-scheduler-design.md` Q2
+(victim selection) explicitly defers topology-aware variants to this
+note (lines 262–270 [Verified: 2026-04-16]):
+
+> Topology-aware variants (C, D) are deferred to
+> `numa-aware-sharding.md` and can be added behind a policy parameter
+> without breaking the ABI.
+
+This note scopes three concerns: (1) cache-line padding to prevent
+false sharing on contended atomics, (2) NUMA-node-aware thread pinning
+and memory allocation, (3) topology-aware steal-victim selection for
+`Stealing`.
+
+## Question
+
+1. **Cache-line padding.** What is the false-sharing exposure in
+   Sharded and Stealing, and what padding is needed?
+2. **NUMA pinning.** Should we pin worker threads and their memory to
+   NUMA nodes?
+3. **Topology-aware steal-victim selection.** Should `Stealing` prefer
+   NUMA-local or L2-cluster-local victims?
+
+## Constraints
+
+| Constraint | Source | Implication |
+|------------|--------|-------------|
+| Apple Silicon cache line: **128 bytes** | `sysctl hw.cachelinesize` on this host [Verified: 2026-04-16] | Safe portable padding must be ≥ 128 bytes |
+| x86-64 cache line: **64 bytes** | Intel Optimization Manual §2.6.2 [Verified: 2026-04-16] | 128-byte padding over-pads on x86 but does not harm correctness |
+| Swift has **no** cache-line-size constant | Searched: `Synchronization`, `swift-atomics`, `swift-collections`, `swift-primitives` [Verified: 2026-04-16] | We must define our own; we would be first in the ecosystem |
+| macOS has **no NUMA** (UMA) | `sysctl -a | grep numa` returns nothing; Apple Silicon is unified memory [Verified: 2026-04-16] | NUMA pinning is Linux-only |
+| Apple Silicon locality boundary: **L2 cluster** | `hw.perflevel0.cpusperl2=4`, `hw.cacheconfig` [Verified: 2026-04-16] | On Apple Silicon, "topology-aware" means cluster-aware, not NUMA-node-aware |
+| Linux NUMA APIs: `numa_run_on_node`, `pthread_setaffinity_np`, `numa_alloc_onnode` | `man 3 numa`, `man 2 sched_setaffinity` [Verified: 2026-04-16] | Available but require libnuma; no privilege gating (unlike SCHED_DEADLINE) |
+| Sharded cursor (`Atomic<Index<Kernel.Thread>>`) is unpadded; co-located with read-only fields in a heap object | `Kernel.Thread.Executor.Sharded.swift:41` [Verified: 2026-04-16] | Write-contended cursor may false-share with read-only `executors` and `count` |
+| Stealing workers are class-per-worker — independent heap objects | `Kernel.Thread.Executor.Stealing.Worker.swift:32–41` [Verified: 2026-04-16] | Cross-worker false sharing is avoided by accident (allocator-provided alignment) |
+| Acar-Blelloch-Blumofe 2002: NUMA-local steal bias helps constant factor, not asymptotic bound | [TCS 35(3):321–347](https://dl.acm.org/doi/10.1145/277651.277678) [Verified: 2026-04-16] | Topology-aware stealing is a constant-factor optimization, not a correctness concern |
+
+## Prior Art Survey
+
+### Cache-line padding in production runtimes
+
+| Runtime | Mechanism | Size | Source |
+|---------|-----------|:---:|--------|
+| Rust crossbeam | `CachePadded<T>` with `#[repr(align(128))]` on aarch64-apple, `align(64)` elsewhere | 64/128 | crossbeam-utils [Verified: 2026-04-16] |
+| C++ stdlib | `std::hardware_destructive_interference_size` (compile-time; GCC: 64; unavailable on Apple Clang) | 64 | C++17 spec |
+| Linux kernel | `____cacheline_aligned_in_smp` | `L1_CACHE_BYTES` (64 on x86) | `arch/x86/include/asm/cache.h` |
+| Swift Concurrency runtime (C++) | Struct layout separation in `DefaultActorImpl` (header vs footer) | implicit | `Actor.cpp:1252` |
+| Swift ecosystem | **None.** No `@_alignment(128)` or `CachePadded` pattern exists | — | Searched stdlib, swift-atomics, swift-collections [Verified: 2026-04-16] |
+
+### NUMA in production runtimes
+
+| Runtime | NUMA awareness | Source |
+|---------|:---:|--------|
+| Tokio | No; uses crossbeam `CachePadded` for false-sharing only | `tokio-rs/tokio` [Verified: 2026-04-16] |
+| Go | No; `sched_getaffinity` for CPU counting only | `runtime/os_linux.go` [Verified: 2026-04-16] |
+| Java HotSpot | `-XX:+UseNUMA` — places TLABs on local NUMA node | Oracle docs [Secondary confirmation] |
+| .NET | `GCServer` — one GC heap per NUMA node | .NET Runtime docs [Secondary confirmation] |
+
+Java and .NET's NUMA support is GC-focused (memory allocation locality),
+not scheduling-focused (thread-pinning for work-stealing). No surveyed
+general-purpose task scheduler implements NUMA-aware steal-victim
+selection.
+
+### Acar-Blelloch-Blumofe (2002) — Data Locality of Work Stealing
+
+Key result: expected remote steals are `O(P · T∞ · L)` — proportional
+to critical-path length times the number of processors times the
+cache-line cost. Work-stealing achieves near-optimal locality for
+series-parallel computations. NUMA-local steal bias reduces the
+constant factor but not the asymptotic bound.
+
+**Contextualization.** Typical Swift task parallelism has short critical
+paths and few steals. NUMA-local stealing helps only for bulk-parallel
+workloads on multi-socket servers — a niche target for swift-executors
+v1.
+
+## Analysis
+
+### Q1: Cache-line padding
+
+**False-sharing audit** [Verified: 2026-04-16]:
+
+| Executor | Contended field | Risk | Fix |
+|----------|----------------|:---:|-----|
+| Sharded | `cursor: Atomic<Index<Kernel.Thread>>` at `:41` — written on every `next()` call, co-located with immutable `executors` array ref | Low-Medium | Pad or isolate cursor into its own 128-byte-aligned allocation |
+| Stealing | Per-worker `deque`, `wait`, `handle` at `Worker.swift:32–41` — each worker is a separate heap class | Low | Heap allocator provides independent alignment; no cross-worker false sharing |
+| Stealing (post-Chase-Lev) | Stealer's CAS on victim's `top` atomic bounces the victim's cache line | Inherent (algorithm) | Cannot be eliminated; is the Chase-Lev cost model |
+
+**Recommendation revised (post-spike, 2026-04-16):**
+`@_alignment(128)` is **not possible in Swift** — the compiler caps
+`@_alignment` at 16. Verified by spike:
+`Experiments/alignment-spike/` [Verified: 2026-04-16].
+
+Alternative approaches for `CacheLine.Padded<T>`:
+
+1. **Manual padding tuple.** Add enough `UInt64` fields to bring
+   `MemoryLayout<CacheLinePadded<T>>.stride` to ≥ 128. Works for
+   value types but requires computing the pad size per `T`.
+2. **`posix_memalign(128)` for heap-allocated padded values.** Verified
+   working by spike (V3: PASS). For class-based executors (Sharded,
+   Stealing), the contended field can be isolated into its own 128-byte-
+   aligned heap allocation, stored as a pointer. This is the cleanest
+   approach for our use case.
+3. **Language feature request.** The `@_alignment(16)` cap is a
+   compiler-imposed limit, not a hardware limit. Filing a Swift
+   compiler issue to raise the cap is warranted for the ecosystem.
+
+Apply to Sharded's cursor via approach (2) (`posix_memalign`).
+Stealing needs no action in v1 — Worker instances are 192 bytes per
+`malloc_size` ([Verified: 2026-04-16 by alignment spike V4]), so
+back-to-back allocations cannot share a 128-byte cache line.
+
+The constant 128 (Apple Silicon) is the correct portable minimum: it
+over-pads on x86 (64-byte lines) but over-padding is safe. Under-
+padding (64 on Apple Silicon) causes false sharing.
+
+### Q2: NUMA pinning
+
+macOS has no NUMA (UMA). Linux multi-socket servers are the only
+target where NUMA pinning has value. The APIs are unprivileged but
+require `libnuma` (not universally installed).
+
+**Recommendation: out of scope for v1.** NUMA pinning is a policy
+decision for the deployment operator, not the executor library. If
+users need it, they pin threads themselves before passing them to the
+executor (or we expose an `Options.threadAffinity: [CpuSet]?`
+parameter in v2).
+
+### Q3: Topology-aware steal-victim selection
+
+`work-stealing-scheduler-design.md` Q2 recommends random victim
+selection for v1. The Acar-Blelloch-Blumofe bound shows topology-aware
+bias helps only the constant factor on bulk-parallel workloads.
+
+Current implementation: sequential scan from own position
+(`Worker.swift:69–76` [Verified: 2026-04-16]). This is a pre-spike
+placeholder; the design doc recommends random.
+
+**Recommendation: random for v1 (per work-stealing-scheduler-design.md Q2).
+Topology-aware as an `Options.victimSelection: .random | .nearestFirst`
+policy in v2.** On Apple Silicon, "nearest" means same L2 cluster
+(`hw.perflevel0.cpusperl2`); on Linux NUMA, same NUMA node
+(`/sys/devices/system/node/nodeN/cpulist`). The policy parameter can
+be added without ABI break.
+
+## Outcome
+
+**Status:** `IN_PROGRESS`.
+
+### Initial recommendations
+
+| Question | Recommendation |
+|----------|----------------|
+| Cache-line padding | Define `CacheLine.Padded<T>` at L1 (128 bytes); apply to Sharded cursor. Stealing needs no padding in v1 |
+| NUMA pinning | Out of scope for v1; expose `Options.threadAffinity` in v2 |
+| Victim selection | Random for v1; `Options.victimSelection` in v2 |
+
+### Next steps before promotion to DECISION
+
+1. **Define `CacheLine.Padded<T>`** in `swift-cpu-primitives` or
+   `swift-memory-primitives`. Use `posix_memalign(128)` for heap-backed
+   storage (since `@_alignment(128)` exceeds Swift's max of 16
+   [Verified: 2026-04-16]). First cache-line-padded type in the ecosystem.
+2. **Apply to Sharded cursor.** Isolate cursor into its own 128-byte-
+   aligned heap allocation via the padded type.
+3. **Switch Stealing's victim selection from sequential scan to random**
+   per work-stealing-scheduler-design.md Q2.
+4. **Benchmark before/after padding** on Sharded under high-contention
+   `next()` (16+ concurrent callers). Measure `cursor.advance` latency
+   P99.
+5. **Defer NUMA and topology-aware stealing** to v2 with an
+   `Options`-based policy parameter.
+
+### Escalation note
+
+Per [RES-004b]: `CacheLine.Padded<T>` is an L1 primitive addition
+(either `swift-cpu-primitives` or `swift-memory-primitives`). Scope
+crosses `swift-primitives` (L1) and `swift-executors` (L3). No
+escalation to `swift-institute` required.
+
+## References
+
+### Architecture
+
+- Apple WWDC 2020 "Optimize for Apple Silicon" — 128-byte cache lines.
+- Intel. *64 and IA-32 Architectures Optimization Reference Manual*,
+  §2.6.2. 64-byte cache lines.
+- `sysctl hw.cachelinesize` = 128 on this host [Verified: 2026-04-16].
+
+### Cache-line padding
+
+- Rust crossbeam-utils —
+  [`CachePadded`](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-utils/src/cache_padded.rs)
+  (`align(128)` on aarch64-apple).
+- C++17 — `std::hardware_destructive_interference_size`.
+- Linux kernel — `____cacheline_aligned_in_smp`.
+
+### NUMA
+
+- Linux `man 3 numa`, `man 2 sched_setaffinity`,
+  `Documentation/admin-guide/mm/numa_memory_policy.rst`.
+- Java `-XX:+UseNUMA` — Oracle docs.
+- .NET GCServer — Runtime docs.
+
+### Data locality
+
+- Acar, U. A., Blelloch, G. E., & Blumofe, R. D. (2002). [The Data
+  Locality of Work
+  Stealing](https://dl.acm.org/doi/10.1145/277651.277678). *Theory of
+  Computing Systems*, 35(3), 321–347.
+
+### Internal references
+
+- `work-stealing-scheduler-design.md` Q2 — random victim selection
+  for v1; topology-aware deferred here.
+- `executor-package-design.md` — Sharded and Stealing taxonomy.
+- `executor-identity-sharded.md` — complements this note for the
+  `isIsolatingCurrentContext` gap.

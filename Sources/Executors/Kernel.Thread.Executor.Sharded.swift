@@ -76,6 +76,30 @@ extension Kernel.Thread.Executor.Sharded {
         executors[index % executors.count]
     }
 
+    /// Verifies the current execution context is on any of this pool's threads.
+    ///
+    /// Iterates all shard executors, returning `true` if the calling thread
+    /// matches any shard's OS thread. Returns `false` if no shard matches.
+    ///
+    /// O(N) where N is the shard count. For typical N ≤ 16 this is ~16 ns
+    /// (one `pthread_equal` per shard).
+    public func isIsolatingCurrentContext() -> Bool? {
+        for executor in executors {
+            if executor.isIsolatingCurrentContext() == true { return true }
+        }
+        return false
+    }
+
+    /// Crash-or-pass isolation check. Called by consumer code as a last
+    /// resort after `isIsolatingCurrentContext()` returns `nil`.
+    public func checkIsolated() {
+        guard isIsolatingCurrentContext() == true else {
+            preconditionFailure(
+                "Kernel.Thread.Executor.Sharded: current thread is not a shard thread"
+            )
+        }
+    }
+
     /// Shutdown all executor threads in the pool.
     ///
     /// Signals each executor's run loop to exit after processing remaining jobs,
