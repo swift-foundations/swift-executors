@@ -47,92 +47,108 @@ extension Kernel.Thread.Executor.Stealing {
             self.rngState = UInt32(truncatingIfNeeded: id) &+ 0x9E3779B9
             if self.rngState == 0 { self.rngState = 1 }
         }
+    }
+}
 
-        /// Advance the XorShift32 PRNG and return the next 32-bit value.
-        ///
-        /// From Marsaglia 2003: period = 2^32 − 1, non-zero state.
-        /// One multiplication-free mix per call; dominated by the three
-        /// shifts on modern hardware.
-        private func nextRandom() -> UInt32 {
-            rngState ^= rngState &<< 13
-            rngState ^= rngState &>> 17
-            rngState ^= rngState &<< 5
-            return rngState
+// MARK: - PRNG
+
+extension Kernel.Thread.Executor.Stealing.Worker {
+    /// Advance the XorShift32 PRNG and return the next 32-bit value.
+    ///
+    /// From Marsaglia 2003: period = 2^32 − 1, non-zero state.
+    /// One multiplication-free mix per call; dominated by the three
+    /// shifts on modern hardware.
+    private func nextRandom() -> UInt32 {
+        rngState ^= rngState &<< 13
+        rngState ^= rngState &>> 17
+        rngState ^= rngState &<< 5
+        return rngState
+    }
+}
+
+// MARK: - Lifecycle
+
+extension Kernel.Thread.Executor.Stealing.Worker {
+    func start(pool: Kernel.Thread.Executor.Stealing) {
+        self.handle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
+            let worker = retained.take()
+            worker.runLoop(pool: pool)
         }
+    }
 
-        func start(pool: Kernel.Thread.Executor.Stealing) {
-            self.handle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
-                let worker = retained.take()
-                worker.runLoop(pool: pool)
-            }
-        }
+    func wake() { wait.wake.all() }
 
-        func enqueue(_ job: UnownedJob) {
-            wait.withLock { _ = deque.push(job) }
-            wait.wake()
-        }
+    func join() { handle.take()?.join() }
+}
 
-        func wake() { wait.wake.all() }
+// MARK: - Job Queue
 
-        func join() { handle.take()?.join() }
+extension Kernel.Thread.Executor.Stealing.Worker {
+    func enqueue(_ job: UnownedJob) {
+        wait.withLock { _ = deque.push(job) }
+        wait.wake()
+    }
 
-        private func runLoop(pool: Kernel.Thread.Executor.Stealing) {
-            while !pool._shutdown.isSet {
-                // Own deque — under own lock
-                if let job = wait.withLock({ deque.take() }) {
-                    unsafe Kernel.Thread.Executor.runJob(
-                        job,
-                        onTask: pool.asUnownedTaskExecutor(),
-                        priorityTracking: pool.priorityTracking
-                    )
-                    continue
-                }
-                // Steal — NOT under own lock, only victim's.
-                // Random victim selection via per-worker XorShift32 PRNG
-                // per work-stealing-scheduler-design.md Q2. Up to N-1
-                // attempts; each attempt uniformly samples a non-self
-                // peer.
-                var stolen: UnownedJob? = nil
-                let n = pool.workers.count
-                if n > 1 {
-                    for _ in 0..<(n - 1) {
-                        var victim = Int(nextRandom() % UInt32(n))
-                        if victim == id {
-                            victim = (victim + 1) % n
-                        }
-                        if let job = pool.workers[victim].trySteal() {
-                            stolen = job
-                            break
-                        }
-                    }
-                }
-                if let job = stolen {
-                    unsafe Kernel.Thread.Executor.runJob(
-                        job,
-                        onTask: pool.asUnownedTaskExecutor(),
-                        priorityTracking: pool.priorityTracking
-                    )
-                    continue
-                }
-                // Wait — under own lock
-                wait.withLock {
-                    if !pool._shutdown.isSet && deque.isEmpty {
-                        wait.wait()
-                    }
-                }
-            }
-            // Drain remaining
-            while let job = wait.withLock({ deque.take() }) {
+    fileprivate func trySteal() -> UnownedJob? {
+        wait.withLock { deque.steal() }
+    }
+}
+
+// MARK: - Run Loop
+
+extension Kernel.Thread.Executor.Stealing.Worker {
+    private func runLoop(pool: Kernel.Thread.Executor.Stealing) {
+        while !pool._shutdown.isSet {
+            // Own deque — under own lock
+            if let job = wait.withLock({ deque.take() }) {
                 unsafe Kernel.Thread.Executor.runJob(
                     job,
                     onTask: pool.asUnownedTaskExecutor(),
                     priorityTracking: pool.priorityTracking
                 )
+                continue
+            }
+            // Steal — NOT under own lock, only victim's.
+            // Random victim selection via per-worker XorShift32 PRNG
+            // per work-stealing-scheduler-design.md Q2. Up to N-1
+            // attempts; each attempt uniformly samples a non-self
+            // peer.
+            var stolen: UnownedJob? = nil
+            let n = pool.workers.count
+            if n > 1 {
+                for _ in 0..<(n - 1) {
+                    var victim = Int(nextRandom() % UInt32(n))
+                    if victim == id {
+                        victim = (victim + 1) % n
+                    }
+                    if let job = pool.workers[victim].trySteal() {
+                        stolen = job
+                        break
+                    }
+                }
+            }
+            if let job = stolen {
+                unsafe Kernel.Thread.Executor.runJob(
+                    job,
+                    onTask: pool.asUnownedTaskExecutor(),
+                    priorityTracking: pool.priorityTracking
+                )
+                continue
+            }
+            // Wait — under own lock
+            wait.withLock {
+                if !pool._shutdown.isSet && deque.isEmpty {
+                    wait.wait()
+                }
             }
         }
-
-        fileprivate func trySteal() -> UnownedJob? {
-            wait.withLock { deque.steal() }
+        // Drain remaining
+        while let job = wait.withLock({ deque.take() }) {
+            unsafe Kernel.Thread.Executor.runJob(
+                job,
+                onTask: pool.asUnownedTaskExecutor(),
+                priorityTracking: pool.priorityTracking
+            )
         }
     }
 }
