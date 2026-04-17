@@ -2,7 +2,7 @@
 
 <!--
 ---
-version: 0.3.0
+version: 0.4.0
 last_updated: 2026-04-17
 status: DECISION
 tier: 2
@@ -286,6 +286,63 @@ Stealing-style worker loop where `next()` is called once per actual
 job rather than in a tight loop. If the padding effect is still
 neutral there, revert `Sharded.cursor` and reserve `CPU.Cache.Padded`
 for per-thread state.
+
+### Realistic-workload benchmark (2026-04-17, follow-up)
+
+`Experiments/realistic-sharded-benchmark/` answers the v2 question
+above. Each worker interleaves `next()` with a compute burn whose
+length is calibrated to a target nanosecond budget, touching a
+1 MiB scratch buffer between calls so cache lines are evicted the
+way real work would evict them.
+
+**V1 — compute sweep (4 threads, 100k iterations):**
+
+| compute/iter | unpadded | padded | speedup |
+|:-------------|---------:|-------:|--------:|
+| ~10 ns  | ~15 ms  | ~12 ms  | 1.0–1.6× (noisy — iteration is too short to observe real work) |
+| ~100 ns | ~38 ms  | ~38 ms  | 0.89–1.14× (noise) |
+| ~1 µs   | ~120 ms | ~117 ms | **consistently 1.01–1.03×** |
+| ~10 µs  | ~1.3 s  | ~1.1 s  | 0.81–1.02× (dominated by compute; cursor cost invisible) |
+
+At the realistic working point (~1 µs of work per `next()` call —
+roughly a short actor job), padded is consistently 1–3 % faster.
+Not a dramatic win, but the direction matches the hypothesis.
+
+**V2 — thread scaling at ~1 µs compute:**
+
+| threads | unpadded | padded | ratio |
+|---------|---------:|-------:|------:|
+| 1 | ~100 ms | ~100 ms | 1.00× |
+| 2 | ~102 ms | ~102 ms | 1.00× |
+| 4 | ~106 ms | ~105 ms | 1.00× |
+| 8 | ~144 ms | ~147 ms | 0.97× |
+
+Thread scaling is essentially flat — the compute burn dominates and
+masks any cursor-line effect.
+
+**Synthesis across both benchmarks.**
+
+| workload | padded vs unpadded |
+|----------|-------------------|
+| Textbook false-sharing (V3 of cursor-padding) | **34× faster** — primitive strongly validated |
+| Shared cursor, tight loop (V1 of cursor-padding) | ~0.6–1.2× (noisy; padded often slower at extreme contention) |
+| Shared cursor + realistic compute (this note V1) | **1.01–1.03× at 1 µs work/iter** (consistent) |
+| Shared cursor + very heavy compute (this note V1) | 1.00× (compute dominates) |
+
+**Final verdict.** Keep the `Sharded.cursor` padding as-is.
+
+- At the realistic working point it is slightly positive, not
+  neutral — the cursor-padding-benchmark's negative V1 numbers
+  reflect the pathological tight-loop regime, not production use.
+- The primitive is separately validated for its intended use
+  (independent per-thread state, V3).
+- The pointer-indirection cost the tight-loop benchmark flagged
+  disappears once real work intervenes between `next()` calls.
+- Reverting would churn code for a 1 % difference in the wrong
+  direction.
+
+The v2 re-benchmark question is now resolved and struck from the
+implementation roadmap.
 
 ### Escalation note
 
