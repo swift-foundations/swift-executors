@@ -400,6 +400,49 @@ small.
    `BitwiseCopyable`; Chase-Lev atomicity suffices; documented in design
    discussion.
 
+### Benchmark amendment (2026-04-17)
+
+`Experiments/victim-selection-benchmark/` validates Q2's DECISION
+(random victim selection) against a sequential-scan baseline using a
+minimal mutex-protected deque (not Chase-Lev; sufficient to isolate
+the victim-selection variable). Averages across 3 runs, Apple Swift
+6.3 / macOS 26 arm64:
+
+**V1 — Skewed initial load (100k jobs placed on worker 0):**
+
+| workers | sequential | random | speedup |
+|---------|-----------:|-------:|--------:|
+| 4 | ~13 ms | ~9 ms | **~1.5×** |
+| 8 | ~24 ms | ~11 ms | **~2.2×** |
+
+Random's per-attempt success rate is lower (30 % vs 50 % at 4w;
+14 % vs 27 % at 8w) — more attempts hit empty peers — but total
+drain time is shorter because steal attempts spread across peers
+rather than colliding on worker 0's lock.
+
+**V2 — Even initial load (25k per worker):**
+
+| workers | sequential | random | ratio |
+|---------|-----------:|-------:|------:|
+| 4 | ~3.6 ms | ~3.2 ms | ~0.9× |
+| 8 | ~10.3 ms | ~11.4 ms | ~1.1× |
+
+Under balanced load both strategies converge — little stealing is
+needed, and the small cost of random's broader probing rounds out
+roughly equal.
+
+**Verdict.** Q2's DECISION is correct. Random victim selection wins
+decisively on the scenario it was chosen for (skewed load, which
+production task placement frequently exhibits) and does not regress
+on balanced load within measurement noise. XorShift32 per-worker
+seeding costs ~3 ns per call — below the mutex-acquisition cost that
+dominates steal-attempt overhead.
+
+**Implementation note (2026-04-17).** `Kernel.Thread.Executor.Stealing.Worker`
+now carries the per-worker XorShift32 state (seed = `id &+ 0x9E3779B9`,
+OR-guaranteed non-zero), replacing the prior sequential-scan loop
+over `pool.workers`. Single-writer; no lock.
+
 ### Escalation note
 
 Per [RES-004b]: this analysis touches `swift-executor-primitives` (L1),
