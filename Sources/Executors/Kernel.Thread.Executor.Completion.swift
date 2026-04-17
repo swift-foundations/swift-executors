@@ -289,16 +289,11 @@ extension Kernel.Thread.Executor.Completion {
             eventBuffer.removeAll(keepingCapacity: true)
             let waitError: Kernel.Completion.Error?
             do throws(Kernel.Completion.Error) {
-                // Phase: flush pending submissions.
+                // Phase: flush pending submissions to the kernel.
                 _ = try k.flush()
-                // Phase: drain whatever CQEs are already queued.
                 k.drain { event in
                     eventBuffer.append(event)
                 }
-                // Phase: if nothing was drained, block on the kernel's
-                // notification (eventfd on Linux; absent on backends
-                // where the completion mechanism is inherently
-                // blocking). Drain again afterward.
                 if eventBuffer.isEmpty {
                     k.notification?.wait()
                     k.drain { event in
