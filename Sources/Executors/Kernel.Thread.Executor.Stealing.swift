@@ -63,7 +63,7 @@ extension Kernel.Thread.Executor {
             self.priorityTracking = options.priorityTracking
             self.cursor = .init(.zero)
             self.workers = Array(count: options.count) { position in
-                Worker(id: Int(bitPattern: position.ordinal))
+                Worker(id: position)
             }
             for worker in workers {
                 worker.start(pool: self)

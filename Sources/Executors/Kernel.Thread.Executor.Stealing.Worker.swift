@@ -3,6 +3,9 @@
 //  swift-executors
 //
 
+import Index_Primitives
+import Ordinal_Primitives
+
 extension Kernel.Thread.Executor.Stealing {
     /// A single work-stealing worker owning one OS thread and one deque.
     ///
@@ -30,7 +33,7 @@ extension Kernel.Thread.Executor.Stealing {
     /// - Not safe to use outside a `Stealing` pool -- lifetime and shutdown
     ///   semantics are owned by the pool.
     package final class Worker: @unsafe @unchecked Sendable {
-        let id: Int
+        let id: Index<Kernel.Thread>
         private var deque: Executor_Primitives.Executor.Job.Deque
         private let wait: Executor.Wait.Condvar
         private var handle: Kernel.Thread.Handle?
@@ -39,12 +42,12 @@ extension Kernel.Thread.Executor.Stealing {
         /// so no synchronization needed.
         private var rngState: UInt32
 
-        init(id: Int) {
+        init(id: Index<Kernel.Thread>) {
             self.id = id
             self.deque = .init(capacity: 1024)
             self.wait = .init()
             // XorShift32 requires non-zero state; OR with 1 guarantees it.
-            self.rngState = UInt32(truncatingIfNeeded: id) &+ 0x9E3779B9
+            self.rngState = UInt32(truncatingIfNeeded: id.ordinal.rawValue) &+ 0x9E3779B9
             if self.rngState == 0 { self.rngState = 1 }
         }
     }
@@ -114,17 +117,20 @@ extension Kernel.Thread.Executor.Stealing.Worker {
             // attempts; each attempt uniformly samples a non-self
             // peer.
             var stolen: UnownedJob? = nil
-            let n = pool.workers.count
-            if n > 1 {
-                for _ in 0..<(n - 1) {
-                    var victim = Int(nextRandom() % UInt32(n))
+            let count = pool.count
+            if count > .one {
+                let limit = count.subtract.saturating(.one)
+                var attempts = Index<Kernel.Thread>.zero
+                while attempts < limit {
+                    var victim = Index<Kernel.Thread>(Ordinal(UInt(nextRandom()))) % count
                     if victim == id {
-                        victim = (victim + 1) % n
+                        victim = (victim + .one) % count
                     }
                     if let job = pool.workers[victim].trySteal() {
                         stolen = job
                         break
                     }
+                    attempts += .one
                 }
             }
             if let job = stolen {

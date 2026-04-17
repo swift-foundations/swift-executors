@@ -7,7 +7,7 @@ Verification of 10 supervisor review findings (L3 scope: findings 1–6).
 | # | Original Finding | Location | Status |
 |---|------------------|----------|--------|
 | 1 | Stealing ABBA deadlock — `trySteal()` inside own `wait.withLock` | Kernel.Thread.Executor.Stealing.swift:118–148 | RESOLVED — lock scopes are separated. Own lock (line 121) released before steal loop (lines 127–133). Steal acquires only victim's lock. No simultaneous lock holding. |
-| 2 | Polling `#if !os(Windows)` hides type | Kernel.Thread.Executor.Polling.swift:6 | OPEN — entire type behind `#if !os(Windows)`. See Code Surface finding #6 and Platform finding #2. |
+| 2 | Polling `#if !os(Windows)` hides type | Kernel.Thread.Executor.Polling.swift:6 | DEFERRED 2026-04-16 — Executor Judgment Calls handoff (closed) declined remediation. Domain-authority exception per [PLAT-ARCH-008a] accepted; future Windows backend will ship as sibling `Kernel.Thread.Executor.IOCP`, not as a Polling backend, removing source-breaking-change concern. `// WHY:` + `// TRACKING:` comments present per [PATTERN-016]. See Platform finding #2. |
 | 3 | Polling run loop never blocks | Kernel.Thread.Executor.Polling.swift:161–181 | RESOLVED 2026-04-15 — Phase 3a API revision (commit `e41aded`). Run loop now calls `waitSource.wait()` directly; tick signature changed to `(UnsafeBufferPointer<Kernel.Event>) -> Outcome` receiving events from the poll. Blocking is no longer the consumer's responsibility. |
 | 4 | Scheduled enqueues under lock | Executor.Scheduled.swift:92–118 | RESOLVED — `base.enqueue()` is outside the lock (lines 113–115). Comment at line 112: "Enqueue outside the lock". |
 | 5 | Scheduled missing TaskExecutor conformance | Executor.Scheduled.swift:52–56 | RESOLVED — conditional `TaskExecutor where Base: TaskExecutor` conformance present. |
@@ -44,25 +44,32 @@ Namespace structure follows Nest.Name throughout ([API-NAME-001]). Spec-mirrorin
 
 ---
 
-## Implementation — 2026-04-15
+## Implementation — 2026-04-16
 
 ### Scope
 
-- **Target**: swift-executors (Executors target)
-- **Skill**: implementation — [IMPL-*], [PATTERN-*]
-- **Files**: 10 source files
+- **Target**: swift-executors (Executors target), post Executor Judgment Calls handoff closure
+- **Skill**: implementation — [IMPL-002], [IMPL-010], [IMPL-050], [IMPL-INTENT]
+- **Files**: 11 source files (current HEAD `c296df5`)
 
 ### Findings
 
 | # | Severity | Rule | Location | Finding | Status |
 |---|----------|------|----------|---------|--------|
-| 1 | LOW | [IMPL-002] | Kernel.Thread.Executor.Sharded.swift:66 | `UInt64(Int(self.count))` — double type conversion exposes mechanism. `count` is `Kernel.Thread.Count` (typed); conversion chain to `UInt64` for modular arithmetic is an infrastructure gap. | OPEN |
+| 1 | LOW | [IMPL-002] | Kernel.Thread.Executor.Sharded.swift (previous :66) | Original 2026-04-15 finding: `UInt64(Int(self.count))` double conversion for round-robin modular arithmetic. | RESOLVED 2026-04-15 — commit `1529eea` replaced with `Atomic<Index<Kernel.Thread>>.advance(within: count)`. Current site (`next()` at :66): `executors[cursor.advance(within: count)]` — typed throughout. |
+| 2 | MEDIUM | [IMPL-002] | Kernel.Thread.Executor.Sharded.swift:75–77 | `public func executor(at index: Int) -> Kernel.Thread.Executor { executors[index % executors.count] }` — parameter is raw `Int` on a type whose internal position is `Index<Kernel.Thread>`; body uses `Int` modulo against `executors.count` (also `Int`). Typed form: `public func executor(at position: Index<Kernel.Thread>) -> Kernel.Thread.Executor` with the existing `cursor.advance(within: count)` pattern or modular reduction on the typed position. | DEFERRED 2026-04-16 — Executor Judgment Calls handoff explicitly declared out of original 4 sites (typed count adoption scope); flagged for follow-up. Fix is source-breaking (public signature change). |
+| 3 | MEDIUM | [IMPL-002] | Kernel.Thread.Executor.Stealing.swift:64 | `Worker(id: Int(bitPattern: position.ordinal))` — extracts raw `Ordinal` via `.ordinal` accessor, converts to `Int` via `bitPattern` because `Worker.id` is typed `Int`. The conversion at the call site is the symptom; the root cause is `Worker.id`'s type. | RESOLVED 2026-04-17 — `Worker.id` retyped to `Index<Kernel.Thread>`; call site now `Worker(id: position)` with no `Int(bitPattern:)` conversion. |
+| 4 | MEDIUM | [IMPL-002] | Kernel.Thread.Executor.Stealing.Worker.swift:33, :38, :69–70 | Root cause for findings #3 and downstream arithmetic: `let id: Int` (:33), `init(id: Int)` (:38), and the stealing loop `for offset in 1..<pool.workers.count { let victim = (id + offset) % pool.workers.count }` (:69–70). The steal loop reads as mechanism — raw `Int` arithmetic against an array `.count`, modular reduction for victim selection, bare `Range<Int>` iteration. Typed form: `id: Index<Kernel.Thread>`; offset iteration via a typed range or `forEach` over a `Cardinal`-derived count; victim selection via `(id + offset).retag` composed with `cursor`-style typed modular reduction. Infrastructure (`Ordinal.Protocol % Cardinal.Protocol`, `Array(count:)`) exists in scope via `Ordinal_Primitives` / `Index_Primitives` already imported. | RESOLVED 2026-04-17 — `Worker.id: Index<Kernel.Thread>` and `init(id: Index<Kernel.Thread>)`; XorShift32 seed reads `id.ordinal.rawValue`; steal loop uses typed `Cardinal`/`Ordinal` arithmetic (`count > .one`, `count.subtract.saturating(.one)`, `Index<Kernel.Thread>(Ordinal(UInt(nextRandom()))) % count`, `victim + .one`, `attempts += .one`). 32/32 tests pass. |
 
 ### Summary
 
-1 finding: 0 critical, 0 high, 0 medium, 1 low.
+4 findings: 0 critical, 0 high, 3 medium, 1 low. 3 RESOLVED, 1 DEFERRED.
 
-Run loops read as intent ([IMPL-INTENT]). No unnecessary intermediate bindings ([IMPL-EXPR-001]). `unsafe` keyword placement correct throughout — always wraps entire expression from left ([IMPL-034]). All executor types are classes (required by `SerialExecutor`/`TaskExecutor` protocol conformance) — `~Copyable` default ([IMPL-064]) not applicable. Isolation hierarchy ([IMPL-069]) correctly places executors at Rank 4/5 — they ARE the synchronization mechanism.
+Findings #2, #3, #4 are the "remaining tasks" from the Executor Judgment Calls handoff closure. All were explicitly flagged for follow-up, not silently deferred — handoff closure reflection (`2026-04-15-executor-judgment-calls-handoff-closure.md`, action item #3) names the two root sites; this audit adds the Worker cascade (#4) that was not enumerated in the closure.
+
+The root-cause analysis for #3/#4 — `Worker.id` is the axis of the mechanism leak — was acted on 2026-04-17: a standalone retype to `Index<Kernel.Thread>` resolved both in one ~50-line change (HANDOFF-worker-id-typed-retype.md). The Chase-Lev research direction stays open as a separate, larger refactor. Finding #2 (`Sharded.executor(at index: Int)`) is unaffected by the Worker retype — its public-API signature change remains DEFERRED.
+
+Run loops read as intent ([IMPL-INTENT]). No unnecessary intermediate bindings ([IMPL-EXPR-001]). `unsafe` keyword placement correct throughout ([IMPL-034]). All executor types are classes (required by `SerialExecutor`/`TaskExecutor`) — `~Copyable` default ([IMPL-064]) not applicable. Isolation hierarchy ([IMPL-069]) correctly places executors at Rank 4/5.
 
 ---
 
@@ -89,24 +96,24 @@ Run loops read as intent ([IMPL-INTENT]). No unnecessary intermediate bindings (
 
 ---
 
-## Platform — 2026-04-15
+## Platform — 2026-04-16
 
 ### Scope
 
-- **Target**: swift-executors (Executors target)
+- **Target**: swift-executors (Executors target), post Executor Judgment Calls handoff closure
 - **Skill**: platform — [PLAT-ARCH-*], [PATTERN-*]
-- **Files**: 10 source files, Package.swift
+- **Files**: 11 source files, Package.swift (current HEAD `c296df5`)
 
 ### Findings
 
 | # | Severity | Rule | Location | Finding | Status |
 |---|----------|------|----------|---------|--------|
 | 1 | MEDIUM | [PLAT-ARCH-008] | Executor.Main.swift:7–8 | `import Dispatch` on Darwin bypasses the platform stack. Consumer-facing package should use `import Kernel` exclusively. Dispatch integration should live in a platform package or be abstracted behind the Kernel re-export chain. | OPEN |
-| 2 | MEDIUM | [PLAT-ARCH-008a] | Kernel.Thread.Executor.Polling.swift:6 | `#if !os(Windows)` hides entire type. Domain authority criteria: (1) domain authority YES, (2) Kernel imports only YES (within the guarded block), (3) domain strategy YES, (4) irreducible YES — type requires non-Windows kernel events. Compliant as domain authority exception, but the namespace `Kernel.Thread.Executor.Polling` is invisible on Windows, preventing future IOCP-based implementation without source-breaking change. | OPEN |
+| 2 | MEDIUM | [PLAT-ARCH-008a] | Kernel.Thread.Executor.Polling.swift:6 | `#if !os(Windows)` hides entire type. Domain authority criteria: (1) domain authority YES, (2) Kernel imports only YES (within the guarded block), (3) domain strategy YES, (4) irreducible YES — type requires non-Windows kernel events. Namespace `Kernel.Thread.Executor.Polling` is invisible on Windows. | DEFERRED 2026-04-16 — Executor Judgment Calls handoff (closed) declined remediation. Supervisor rationale: future Windows backend will ship as sibling `Kernel.Thread.Executor.IOCP`, not as a Polling backend, so the source-breaking-change concern that Ground Rule #4 of the original executor dispatch hedged against is moot. Original Ground Rule #4 superseded by later domain-authority analysis. `// WHY:` + `// TRACKING:` comments present in file per [PATTERN-016]. |
 
 ### Summary
 
-2 findings: 0 critical, 0 high, 2 medium, 0 low.
+2 findings: 0 critical, 0 high, 2 medium, 0 low. 1 OPEN, 1 DEFERRED.
 
 Swift 6 settings correctly configured ([PATTERN-005], [PATTERN-006]). Platform conditionals in `Executor.Main` use `#if os(...)` for platform identity ([PATTERN-004a]). The `import Dispatch` is the only bypass of the platform stack — all other platform access goes through `import Kernel`.
 
@@ -156,12 +163,12 @@ The pre-existing findings #2–#8 from Code Surface 2026-04-15 (compound `shutdo
 
 | # | Severity | Rule | Location | Finding | Status |
 |---|----------|------|----------|---------|--------|
-| 1 | MEDIUM | [IMPL-002] | Kernel.Thread.Executor.Stealing.Worker.swift:96–108 | Random-victim steal loop adds new raw-`Int` arithmetic at call sites: `let n = pool.workers.count` (pulls a raw `Int` from the array), `for _ in 0..<(n - 1)` (raw `Range<Int>`), `var victim = Int(nextRandom() % UInt32(n))` (raw modulo on `UInt32` then `Int`-narrow), `victim = (victim + 1) % n` (raw modular advance), and `pool.workers[victim]` indexing. Per [IMPL-002], modular arithmetic on a typed position should be expressed via the typed cursor pattern (`Cardinal % Cardinal → Ordinal`, `(id + offset).retag` etc.). This extends the cascade tracked in **prior: Implementation 2026-04-16 finding #4** (Worker.id raw `Int`, sequential steal loop). The deferral reasoning there — that the Chase-Lev work-stealing redesign may replace the Worker implementation wholesale — applies equally to this new arithmetic. | OPEN |
+| 1 | MEDIUM | [IMPL-002] | Kernel.Thread.Executor.Stealing.Worker.swift:96–108 | Random-victim steal loop adds new raw-`Int` arithmetic at call sites: `let n = pool.workers.count` (pulls a raw `Int` from the array), `for _ in 0..<(n - 1)` (raw `Range<Int>`), `var victim = Int(nextRandom() % UInt32(n))` (raw modulo on `UInt32` then `Int`-narrow), `victim = (victim + 1) % n` (raw modular advance), and `pool.workers[victim]` indexing. Per [IMPL-002], modular arithmetic on a typed position should be expressed via the typed cursor pattern (`Cardinal % Cardinal → Ordinal`, `(id + offset).retag` etc.). This extends the cascade tracked in **prior: Implementation 2026-04-16 finding #4** (Worker.id raw `Int`, sequential steal loop). The deferral reasoning there — that the Chase-Lev work-stealing redesign may replace the Worker implementation wholesale — applies equally to this new arithmetic. | RESOLVED 2026-04-17 — fixed alongside prior 2026-04-16 finding #4 by Worker.id retype. Loop now reads `let count = pool.count`, gates on `count > .one`, walks `attempts < limit` where `limit = count.subtract.saturating(.one)`, samples `Index<Kernel.Thread>(Ordinal(UInt(nextRandom()))) % count`, advances on self-collision via `(victim + .one) % count`, and indexes `pool.workers[victim]` through the existing `Array.subscript<O: Ordinal.Protocol>` integration. No raw `Int` remains. 32/32 tests pass. |
 | 2 | LOW | [IMPL-EXPR-001] | /Users/coen/Developer/swift-primitives/swift-executor-primitives/Sources/Executor Job Priority Primitives/Executor.Job.Priority.Entry.swift:51–57, :67–77 | Both operator overloads use single-use intermediate `let` bindings: `==` declares `lhsDeadline`, `rhsDeadline`, `lhsSequence`, `rhsSequence` (each used once); `<` declares `lhsDeadline`, `rhsDeadline` (used twice — multi-use exception applies) but also `lhsSequence`, `rhsSequence` (each used once). None hit the [IMPL-EXPR-001] boundary conditions (multi-use, explanatory name, complexity ceiling) for the single-use bindings. The intent-style form is `return lhs.deadline == rhs.deadline && lhs.sequence == rhs.sequence` and the equivalent for `<`. Borrowed-`self` access does not require the bindings; `borrowing` parameters permit direct property access for Copyable fields. | RESOLVED 2026-04-17 — replaced both bodies with tuple comparison: `(lhs.deadline, lhs.sequence) == (rhs.deadline, rhs.sequence)` and `< (rhs.deadline, rhs.sequence)`. Note: the naive `lhs.deadline == rhs.deadline && lhs.sequence == rhs.sequence` form fails the borrow checker on `borrowing Self` parameters (chained property access via `&&` flagged as consumption); tuple comparison sidesteps this by collecting both fields into a single non-short-circuit expression. The audit's "borrowed-self access does not require the bindings" rationale was incorrect for the naive `&&` form — corrected here. |
 
 ### Summary
 
-2 findings: 0 critical, 0 high, 1 medium, 1 low. 1 OPEN, 1 RESOLVED.
+2 findings: 0 critical, 0 high, 1 medium, 1 low. 0 OPEN, 2 RESOLVED.
 
 `Kernel.Thread.Executor.PriorityOverride.swift` follows the [IMPL-023] static-layer pattern correctly: instance methods on `Executor`, `Polling`, and `Stealing.Worker` delegate to `Kernel.Thread.Executor.runJob(_:onSerial/onTask:priorityTracking:)`. `unsafe` keyword placement at lines :41, :44–45, :63, :66–67 wraps each expression from the left per [IMPL-034]. The Darwin/non-Darwin branches in `runJob` are appropriately split via `#if canImport(Darwin)` (the `pthread_override_qos_class_*` symbols are platform-bound). The `_qosClass(for:)` switch enumerates the five public Darwin QoS classes and returns `nil` for unmapped raw values — the boundary conversion (`UInt32(job.priority.rawValue)`) is necessary mechanism at the C-API edge.
 
@@ -175,7 +182,7 @@ The new boolean `priorityTracking` parameters propagate through `Sharded.init` �
 
 The `try!` in `Sharded.Options.defaultCount` (Sharded.Options.swift:55) and `Stealing.Options.defaultCount` (Stealing.Options.swift:45) is acceptable — `Kernel.Thread.Count.init(4)` is a compile-time constant whose throwing path (zero count) is statically unreachable. This is not the `try?` anti-pattern called out by [feedback_prefer_typed_throws_over_try_optional].
 
-Pre-existing Implementation 2026-04-16 findings #1 (RESOLVED), #2 (`executor(at index: Int)` raw API at Sharded.swift:83 — unchanged this session, remains DEFERRED), and #3 (`Worker(id: Int(bitPattern: position.ordinal))` at Stealing.swift:66 — unchanged this session, remains DEFERRED) are not re-audited.
+Pre-existing Implementation 2026-04-16 findings #1 (RESOLVED 2026-04-15), #3 and #4 (RESOLVED 2026-04-17 by the Worker.id retype landed in this commit) and #2 (`executor(at index: Int)` raw API at Sharded.swift:83 — unchanged, remains DEFERRED).
 
 ---
 
