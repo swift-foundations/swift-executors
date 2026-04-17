@@ -2,8 +2,8 @@
 
 <!--
 ---
-version: 0.2.0
-last_updated: 2026-04-16
+version: 0.3.0
+last_updated: 2026-04-17
 status: DECISION
 tier: 2
 ---
@@ -224,6 +224,68 @@ be added without ABI break.
   swift-executors v1. When it lands in v2, the policy model should
   slot into the existing `Options` struct rather than a new top-level
   type.
+
+### Benchmark amendment (2026-04-17)
+
+`Experiments/cursor-padding-benchmark/` validates `CPU.Cache.Padded<T>`
+as a primitive and empirically tests its effect on Sharded.cursor.
+
+**V3 (classic false-sharing, each thread writes its OWN atomic):**
+padded wins decisively.
+
+| threads | unpadded | padded | speedup |
+|---------|---------:|-------:|--------:|
+| 2 | 279 M/s | 1095 M/s | **3.92×** |
+| 4 | 165 M/s | 2036 M/s | **12.29×** |
+| 8 |  75 M/s | 2562 M/s | **34.00×** |
+
+This is the textbook false-sharing scenario. Unpadded atomics share
+a cache line; every store from one core invalidates the other cores'
+copies. Padded atomics sit on independent lines and scale linearly.
+The primitive itself is sound.
+
+**V1 (Sharded.cursor workload, 4 shards, all threads hammer the
+same cursor):** padded is *neutral-to-negative* in a tight loop.
+
+| threads | unpadded | padded | ratio |
+|---------|---------:|-------:|------:|
+| 1 | ~360 M/s | ~370 M/s | ~1.0× |
+| 2 | ~210 M/s | ~210 M/s | ~1.0× |
+| 4 | ~100 M/s | ~120 M/s | ~1.2× |
+| 8 |  ~27 M/s |  ~15 M/s | **~0.6×** |
+
+Run-to-run variance is high (± 30 %), but the direction is consistent:
+**under extreme cursor contention, padding does not help and may
+hurt**. The intuition: in V1, all threads CAS the same cursor, so
+the cursor's cache line ping-pongs between cores regardless of
+padding. Isolating the cursor from `executors` / `count` eliminates
+one invalidation channel (the neighbour line stays stable) but adds
+one pointer indirection per access (via `CPU.Cache.Padded._storage`).
+At 8-way contention the indirection overhead dominates.
+
+**Implication.** The DECISION to pad `Sharded.cursor` was rationalized
+by false-sharing between cursor and read-only neighbours. The
+benchmark shows that in the extreme case (tight-loop `next()` with no
+intervening work), the cursor-line contention dwarfs any
+neighbour-sharing cost. In realistic use — where workers do actual
+compute between `next()` calls — the neighbour line is evicted
+anyway, so the unpadded layout's neighbour-re-fetch cost fades into
+the noise.
+
+**Verdict: keep the padding but downgrade the expected benefit.** The
+primitive remains validated for its intended use (independent per-
+thread state, V3 pattern). For `Sharded.cursor` specifically, the
+padding is defensive — it costs a small indirection and does not
+visibly hurt realistic workloads, while insuring against a workload
+mix where neighbour-line stability matters. If a future benchmark on
+the realistic mixed workload shows a regression, reverting to the
+unpadded layout is a one-line change.
+
+**v2 question (tracked).** Re-benchmark after implementing a
+Stealing-style worker loop where `next()` is called once per actual
+job rather than in a tight loop. If the padding effect is still
+neutral there, revert `Sharded.cursor` and reserve `CPU.Cache.Padded`
+for per-thread state.
 
 ### Escalation note
 
