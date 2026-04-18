@@ -121,7 +121,7 @@ extension Executor.Cooperative {
         _ job: consuming ExecutorJob,
         after delay: Duration
     ) {
-        let deadline = ContinuousClock.now.advanced(by: delay)
+        let deadline = Kernel.Clock.Continuous.now().advanced(by: delay)
         let unowned = UnownedJob(job)
         wait.withLock { scheduled.schedule(unowned, at: deadline) }
         wait.wake()
@@ -161,19 +161,19 @@ extension Executor.Cooperative {
 
             let shouldExit = wait.withLock { () -> Bool in
                 // Move ready scheduled jobs into the immediate queue
-                scheduled.drain(now: .now) { jobs.enqueue($0) }
+                scheduled.drain(now: Kernel.Clock.Continuous.now()) { jobs.enqueue($0) }
 
                 // Wait until: immediate jobs available, next deadline fires,
                 // stopped, or shutdown
                 while jobs.isEmpty && !_shutdown.isSet && !_stopped {
                     if let nextDeadline = scheduled.peek {
-                        let remaining = ContinuousClock.now.duration(to: nextDeadline)
+                        let remaining = Kernel.Clock.Continuous.now().duration(to: nextDeadline)
                         if remaining <= .zero {
-                            scheduled.drain(now: .now) { jobs.enqueue($0) }
+                            scheduled.drain(now: Kernel.Clock.Continuous.now()) { jobs.enqueue($0) }
                             continue
                         }
                         _ = wait.wait(timeout: remaining)
-                        scheduled.drain(now: .now) { jobs.enqueue($0) }
+                        scheduled.drain(now: Kernel.Clock.Continuous.now()) { jobs.enqueue($0) }
                     } else {
                         wait.wait()
                     }
