@@ -1107,7 +1107,7 @@ User-delivered decisions after the research pass completed (2026-04-15). Each re
 ### Operational follow-ups (non-design)
 
 - **Subagent Write/Edit permissions**: settings.json wart — the research subagent hit Write/Edit denials and fell back to bash heredoc. Must be resolved before the implementation phase dispatches (the implementation agent writes dozens of files; heredoc fallback does not scale). Tracked separately.
-- **`Research/_index.md`**: per [RES-003c], now required (swift-executors has ≥2 research docs). Cleanup write authorized.
+- **`Research/_index.json`**: per [RES-003c], now required (swift-executors has ≥2 research docs). Cleanup write authorized.
 
 ### What these decisions do NOT change
 
