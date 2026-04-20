@@ -8,8 +8,8 @@ import Executors
 
 @Suite
 struct ScheduledTests {
-    @Test("scheduled wraps base executor")
-    func wrapsBase() {
+    @Test
+    func `scheduled wraps base executor`() {
         let base = Kernel.Thread.Executor()
         let scheduled = Executor.Scheduled(base: base)
         defer {

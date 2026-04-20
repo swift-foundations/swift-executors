@@ -20,31 +20,31 @@ extension Kernel.Thread.Executor.Sharded {
 // MARK: - Unit Tests
 
 extension Kernel.Thread.Executor.Sharded.Test.Unit {
-    @Test("init with default options creates threads")
-    func initDefaultOptions() {
+    @Test
+    func `init with default options creates threads`() {
         let pool = Kernel.Thread.Executor.Sharded()
         #expect(pool.count > 0)  // swiftlint:disable:this empty_count
         #expect(pool.count <= 4)  // Default is min(4, processorCount)
         pool.shutdown()
     }
 
-    @Test("init with custom count")
-    func initCustomCount() {
+    @Test
+    func `init with custom count`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         #expect(pool.count == 2)
         pool.shutdown()
     }
 
-    @Test("next returns an executor")
-    func nextReturnsExecutor() {
+    @Test
+    func `next returns an executor`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         let executor = pool.next()
         _ = executor.asUnownedSerialExecutor()
         pool.shutdown()
     }
 
-    @Test("executor(at:) returns executor at index")
-    func executorAtIndex() {
+    @Test
+    func `executor(at:) returns executor at index`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         let e0 = pool.executor(at: 0)
         let e1 = pool.executor(at: 1)
@@ -53,8 +53,8 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
         pool.shutdown()
     }
 
-    @Test("executor(at:) wraps around")
-    func executorAtIndexWraps() {
+    @Test
+    func `executor(at:) wraps around`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         let e0 = pool.executor(at: 0)
         let e2 = pool.executor(at: 2)  // Should wrap to index 0
@@ -64,21 +64,21 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
         pool.shutdown()
     }
 
-    @Test("shutdown completes gracefully")
-    func shutdownCompletes() {
+    @Test
+    func `shutdown completes gracefully`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         pool.shutdown()
         // No hang = success
     }
 
-    @Test("priorityTracking defaults to false")
-    func priorityTrackingDefaultsFalse() {
+    @Test
+    func `priorityTracking defaults to false`() {
         let options = Kernel.Thread.Executor.Sharded.Options(count: 2)
         #expect(options.priorityTracking == false)
     }
 
-    @Test("priorityTracking true runs jobs correctly")
-    func priorityTrackingTrueRunsJobs() async {
+    @Test
+    func `priorityTracking true runs jobs correctly`() async {
         let pool = Kernel.Thread.Executor.Sharded(
             .init(count: 2, priorityTracking: true)
         )
@@ -92,15 +92,15 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
 // MARK: - Isolation Verification
 
 extension Kernel.Thread.Executor.Sharded.Test.Unit {
-    @Test("isIsolatingCurrentContext returns false from non-shard thread")
-    func isolationFromNonShardThread() {
+    @Test
+    func `isIsolatingCurrentContext returns false from non-shard thread`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         #expect(pool.isIsolatingCurrentContext() == false)
         pool.shutdown()
     }
 
-    @Test("isIsolatingCurrentContext returns true from shard thread")
-    func isolationFromShardThread() async {
+    @Test
+    func `isIsolatingCurrentContext returns true from shard thread`() async {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         let shard = pool.next()
 
@@ -112,8 +112,8 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
         pool.shutdown()
     }
 
-    @Test("isIsolatingCurrentContext returns false after shutdown")
-    func isolationAfterShutdown() {
+    @Test
+    func `isIsolatingCurrentContext returns false after shutdown`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
         pool.shutdown()
         #expect(pool.isIsolatingCurrentContext() == false)
@@ -123,8 +123,8 @@ extension Kernel.Thread.Executor.Sharded.Test.Unit {
 // MARK: - Integration Tests
 
 extension Kernel.Thread.Executor.Sharded.Test.Integration {
-    @Test("round-robin distributes across executors")
-    func roundRobinDistribution() {
+    @Test
+    func `round-robin distributes across executors`() {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
 
         // Get several executors via next()
@@ -146,8 +146,8 @@ extension Kernel.Thread.Executor.Sharded.Test.Integration {
         pool.shutdown()
     }
 
-    @Test("tasks on different executors run independently")
-    func tasksRunIndependently() async {
+    @Test
+    func `tasks on different executors run independently`() async {
         let pool = Kernel.Thread.Executor.Sharded(.init(count: 2))
 
         let e1 = pool.executor(at: 0)

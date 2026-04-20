@@ -14,20 +14,20 @@ extension Kernel.Thread.Executor.Stealing {
 }
 
 extension Kernel.Thread.Executor.Stealing.Test.Unit {
-    @Test("stealing pool creates and shuts down")
-    func createsAndShuts() {
+    @Test
+    func `stealing pool creates and shuts down`() {
         let pool = Kernel.Thread.Executor.Stealing(.init(count: try! .init(2)))
         pool.shutdown()
     }
 
-    @Test("priorityTracking defaults to false")
-    func priorityTrackingDefaultsFalse() {
+    @Test
+    func `priorityTracking defaults to false`() {
         let options = Kernel.Thread.Executor.Stealing.Options(count: try! .init(2))
         #expect(options.priorityTracking == false)
     }
 
-    @Test("priorityTracking true runs jobs correctly")
-    func priorityTrackingTrueRunsJobs() async {
+    @Test
+    func `priorityTracking true runs jobs correctly`() async {
         let pool = Kernel.Thread.Executor.Stealing(
             .init(count: try! .init(2), priorityTracking: true)
         )

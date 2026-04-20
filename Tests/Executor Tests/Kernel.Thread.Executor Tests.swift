@@ -20,8 +20,8 @@ extension Kernel.Thread.Executor {
 // MARK: - Unit Tests
 
 extension Kernel.Thread.Executor.Test.Unit {
-    @Test("executor conforms to SerialExecutor")
-    func serialExecutorConformance() {
+    @Test
+    func `executor conforms to SerialExecutor`() {
         let executor = Kernel.Thread.Executor()
         let unowned = executor.asUnownedSerialExecutor()
         // If this compiles and runs, the executor conforms
@@ -29,8 +29,8 @@ extension Kernel.Thread.Executor.Test.Unit {
         executor.shutdown()
     }
 
-    @Test("executor conforms to TaskExecutor")
-    func taskExecutorConformance() async {
+    @Test
+    func `executor conforms to TaskExecutor`() async {
         let executor = Kernel.Thread.Executor()
 
         // Task(executorPreference:) only works with TaskExecutor
@@ -41,8 +41,8 @@ extension Kernel.Thread.Executor.Test.Unit {
         executor.shutdown()
     }
 
-    @Test("shutdown completes gracefully")
-    func shutdownCompletes() {
+    @Test
+    func `shutdown completes gracefully`() {
         let executor = Kernel.Thread.Executor()
         executor.shutdown()
         // No hang = success
@@ -50,8 +50,8 @@ extension Kernel.Thread.Executor.Test.Unit {
 }
 
 extension Kernel.Thread.Executor.Test.Integration {
-    @Test("task executor preference executes on thread")
-    func taskExecutorPreferenceWorks() async {
+    @Test
+    func `task executor preference executes on thread`() async {
         let executor = Kernel.Thread.Executor()
 
         // Use a Sendable result to verify execution
@@ -63,8 +63,8 @@ extension Kernel.Thread.Executor.Test.Integration {
         executor.shutdown()
     }
 
-    @Test("multiple tasks execute sequentially on same executor")
-    func multipleTasksSequential() async {
+    @Test
+    func `multiple tasks execute sequentially on same executor`() async {
         let executor = Kernel.Thread.Executor()
 
         let r1 = await Task(executorPreference: executor) { 1 }.value

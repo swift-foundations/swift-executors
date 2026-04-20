@@ -33,21 +33,21 @@ private actor Cooperator {
 // MARK: - Unit Tests
 
 extension Executor.Cooperative.Test.Unit {
-    @Test("create and shutdown")
-    func createAndShutdown() {
+    @Test
+    func `create and shutdown`() {
         let executor = Executor.Cooperative()
         executor.shutdown()
     }
 
-    @Test("stop without prior run is a no-op")
-    func stopWithoutRun() {
+    @Test
+    func `stop without prior run is a no-op`() {
         let executor = Executor.Cooperative()
         executor.stop()
         executor.shutdown()
     }
 
-    @Test("runUntil returns immediately when condition is already true")
-    func runUntilImmediateReturn() {
+    @Test
+    func `runUntil returns immediately when condition is already true`() {
         let executor = Executor.Cooperative()
         executor.runUntil { true }
         executor.shutdown()
@@ -57,8 +57,8 @@ extension Executor.Cooperative.Test.Unit {
 // MARK: - Donation Contract
 
 extension Executor.Cooperative.Test.Integration {
-    @Test("run returns on shutdown from another thread")
-    func runReturnsOnShutdown() async {
+    @Test
+    func `run returns on shutdown from another thread`() async {
         let executor = Executor.Cooperative()
 
         let thread = Kernel.Thread.Handle.Reference(
@@ -70,8 +70,8 @@ extension Executor.Cooperative.Test.Integration {
         thread.join()
     }
 
-    @Test("stop causes run to return")
-    func stopCausesRunToReturn() async {
+    @Test
+    func `stop causes run to return`() async {
         let executor = Executor.Cooperative()
 
         let thread = Kernel.Thread.Handle.Reference(
@@ -86,8 +86,8 @@ extension Executor.Cooperative.Test.Integration {
         executor.shutdown()
     }
 
-    @Test("stop from another thread causes runUntil to return")
-    func stopFromOtherThread() async {
+    @Test
+    func `stop from another thread causes runUntil to return`() async {
         let executor = Executor.Cooperative()
 
         let thread = Kernel.Thread.Handle.Reference(
@@ -100,8 +100,8 @@ extension Executor.Cooperative.Test.Integration {
         executor.shutdown()
     }
 
-    @Test("actor method runs on donated thread")
-    func actorMethodRunsOnDonatedThread() async {
+    @Test
+    func `actor method runs on donated thread`() async {
         let executor = Executor.Cooperative()
         let helper = Cooperator(executor)
 
@@ -119,8 +119,8 @@ extension Executor.Cooperative.Test.Integration {
         thread.join()
     }
 
-    @Test("shutdown dominates stop")
-    func shutdownDominatesStop() async {
+    @Test
+    func `shutdown dominates stop`() async {
         let executor = Executor.Cooperative()
 
         let thread = Kernel.Thread.Handle.Reference(

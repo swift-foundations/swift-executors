@@ -14,8 +14,8 @@ import Executors
 
 @Suite
 struct PollingTests {
-    @Test("Polling.Outcome enum exists")
-    func outcomeEnum() {
+    @Test
+    func `Polling.Outcome enum exists`() {
         _ = Kernel.Thread.Executor.Polling.Outcome.continue
         _ = Kernel.Thread.Executor.Polling.Outcome.halt
     }

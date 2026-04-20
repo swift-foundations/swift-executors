@@ -8,8 +8,8 @@ import Executors
 
 @Suite
 struct MainTests {
-    @Test("Main.shared returns an identity")
-    func sharedIdentity() {
+    @Test
+    func `Main.shared returns an identity`() {
         let main = Executor.Main.shared
         _ = main.asUnownedSerialExecutor()
     }
