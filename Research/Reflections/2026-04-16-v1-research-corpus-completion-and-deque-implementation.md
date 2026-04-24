@@ -4,7 +4,9 @@ session_objective: Continue swift-executors v1 research initiative — convert 7
 packages:
   - swift-executors
   - swift-executor-primitives
-status: pending
+status: processed
+processed_date: 2026-04-24
+triage_outcomes: see reflections-processing run 2026-04-24
 ---
 
 # V1 Research Corpus Completion and Deque Implementation

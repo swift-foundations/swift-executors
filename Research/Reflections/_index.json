@@ -16,9 +16,9 @@
         "swift-executors",
         "swift-io"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     },
@@ -31,9 +31,9 @@
         "swift-executors",
         "swift-foundations"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     },
@@ -48,9 +48,9 @@
         "swift-storage-primitives",
         "swift-memory-primitives"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     },
@@ -63,9 +63,9 @@
         "swift-executors",
         "swift-executor-primitives"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     },
@@ -77,9 +77,9 @@
       "packages": [
         "swift-executors"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     },
@@ -93,9 +93,9 @@
         "swift-executor-primitives",
         "swift-cpu-primitives"
       ],
-      "status": "pending",
+      "status": "processed",
       "statusRaw": "pending",
-      "processedDate": null,
+      "processedDate": "2026-04-24",
       "triageOutcome": null,
       "outcomeDescription": null
     }

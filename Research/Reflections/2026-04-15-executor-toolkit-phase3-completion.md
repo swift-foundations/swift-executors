@@ -5,7 +5,9 @@ packages:
   - swift-executor-primitives
   - swift-executors
   - swift-io
-status: pending
+status: processed
+processed_date: 2026-04-24
+triage_outcomes: see reflections-processing run 2026-04-24
 ---
 
 # Executor Toolkit Phase 3 Completion

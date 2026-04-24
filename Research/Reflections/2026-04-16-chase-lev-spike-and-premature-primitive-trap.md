@@ -6,7 +6,9 @@ packages:
   - swift-executor-primitives
   - swift-storage-primitives
   - swift-memory-primitives
-status: pending
+status: processed
+processed_date: 2026-04-24
+triage_outcomes: see reflections-processing run 2026-04-24
 ---
 
 # Chase-Lev Spike and the Premature-Primitive Trap

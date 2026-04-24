@@ -5,7 +5,9 @@ packages:
   - swift-executors
   - swift-executor-primitives
   - swift-cpu-primitives
-status: pending
+status: processed
+processed_date: 2026-04-24
+triage_outcomes: see reflections-processing run 2026-04-24
 ---
 
 # Audit, Remediation, and the Borrowing-Self Chained-`&&` Discovery
