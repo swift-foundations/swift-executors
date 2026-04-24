@@ -138,8 +138,8 @@ extension Kernel.Thread.Executor {
             self.maxEventsPerPoll = maxEventsPerPoll
             self.priorityTracking = priorityTracking
             unsafe (self.tick = tick)
-            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
-                retained.take().runLoop()
+            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained<Kernel.Thread.Executor.Polling>.Outgoing(self)) { retained in
+                retained.consume().runLoop()
             }
         }
     }

@@ -54,8 +54,8 @@ extension Executor {
             self.priority = .init()
             self.wait = .init()
             self._shutdown = .init()
-            self.timerThread = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
-                retained.take().runTimerLoop()
+            self.timerThread = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained<Executor.Scheduled<Base>>.Outgoing(self)) { retained in
+                retained.consume().runTimerLoop()
             }
         }
     }

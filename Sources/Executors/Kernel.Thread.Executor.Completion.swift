@@ -152,8 +152,8 @@ extension Kernel.Thread.Executor {
             self._shutdown = .init()
             self.maxCompletionsPerPoll = maxCompletionsPerPoll
             unsafe (self.tick = tick)
-            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
-                retained.take().runLoop()
+            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained<Kernel.Thread.Executor.Completion>.Outgoing(self)) { retained in
+                retained.consume().runLoop()
             }
         }
 

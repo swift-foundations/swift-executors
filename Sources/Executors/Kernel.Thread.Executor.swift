@@ -79,8 +79,8 @@ extension Kernel.Thread {
             self.jobs = .init()
             self._shutdown = .init()
 
-            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained(self)) { retained in
-                let executor = retained.take()
+            self.threadHandle = unsafe Kernel.Thread.trap(Ownership.Transfer.Retained<Kernel.Thread.Executor>.Outgoing(self)) { retained in
+                let executor = retained.consume()
                 executor.runLoop()
             }
         }
