@@ -93,7 +93,7 @@ extension Executor.Scheduled {
         _ job: consuming ExecutorJob,
         after delay: Duration
     ) {
-        let deadline = Kernel.Clock.Continuous.now().advanced(by: delay)
+        let deadline = Clock.Continuous.now.advanced(by: delay)
         let unowned = UnownedJob(job)
         wait.withLock {
             priority.schedule(unowned, at: deadline)
@@ -126,7 +126,7 @@ extension Executor.Scheduled {
                         wait.wait()
                         continue
                     }
-                    let now = Kernel.Clock.Continuous.now()
+                    let now = Clock.Continuous.now
                     if deadline <= now {
                         priority.drain(now: now) { readyJobs.append($0) }
                         break
