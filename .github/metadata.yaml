@@ -1,0 +1,7 @@
+# .github/metadata.yaml
+# Triaged by AI-assisted bulk pass (2026-04-29).
+description: "Executor composition for Swift."
+topics:
+  - foundations
+  - executors
+homepage: "https://swift-institute.org"
