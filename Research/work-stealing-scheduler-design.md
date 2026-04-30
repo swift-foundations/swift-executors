@@ -400,6 +400,12 @@ small.
    `BitwiseCopyable`; Chase-Lev atomicity suffices; documented in design
    discussion.
 
+### v1 Optimization Items (deferred, tracked here)
+
+| Item | Origin | Status |
+|------|--------|--------|
+| Worker.swift lock-wrapping removal | Worker.swift currently wraps all deque operations in `wait.withLock { deque.push/take/steal }` — correct for the sequential-placeholder Executor but over-synchronized for Chase-Lev (deque is lock-free per Lê et al. 2013). Removing the locks to exploit the lock-free property is a separate Stealing executor design task. | DEFERRED — flagged 2026-04-16, awaits Stealing-executor implementation cycle |
+
 ### Benchmark amendment (2026-04-17)
 
 `Experiments/victim-selection-benchmark/` validates Q2's DECISION
