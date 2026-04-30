@@ -15,6 +15,7 @@
 // Platform:   macOS 26.0 (arm64)
 //
 // Result:     CONFIRMED
+// Revalidated: Swift 6.3.1 (2026-04-30) — PASSES
 //             V1: PASS — single-threaded LIFO/FIFO discipline holds
 //             V2: PASS — pushed=100000, taken=12008, stolen=87992
 //                       (UnsafeMutableBufferPointer storage)

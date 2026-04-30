@@ -14,6 +14,7 @@
 // Platform:   macOS 26.0 (arm64)
 //
 // Result:     CONFIRMED
+// Revalidated: Swift 6.3.1 (2026-04-30) — PASSES
 //             V1: PASS — 3 overrides started and ended in non-LIFO order
 //             V2: PASS — 100k cycles in 85.4 ms (853 ns/cycle; < 1 µs)
 //             V3: PASS — override applied to parked worker; did NOT wake

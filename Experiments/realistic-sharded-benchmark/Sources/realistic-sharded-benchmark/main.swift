@@ -34,6 +34,7 @@
 //       threads, measure throughput + padded vs unpadded delta.
 //
 // Toolchain:  Apple Swift 6.3
+// Revalidated: Swift 6.3.1 (2026-04-30) — PASSES
 // Platform:   macOS 26.x (arm64)
 // Build:      swift run -c release
 //

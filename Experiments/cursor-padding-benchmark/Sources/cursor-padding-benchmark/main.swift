@@ -27,6 +27,7 @@
 //   comment in scheduled-two-clock-spike for the same workaround.
 //
 // Toolchain:  Apple Swift 6.3
+// Revalidated: Swift 6.3.1 (2026-04-30) — PASSES
 // Platform:   macOS 26.x (arm64) — 128-byte cache line
 // Build:      swift run -c release
 //
