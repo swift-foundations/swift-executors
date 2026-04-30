@@ -1,3 +1,6 @@
+// Toolchain: Swift 6.3.1 (2026-04-30) — anchor added during Phase 7a sweep [EXP-007a]
+// Revalidated: Swift 6.3.1 (2026-04-30) — PASSES
+//
 // Alignment Spike
 // Validates that @_alignment(128) propagates through:
 // (a) a generic wrapper, (b) struct composition, (c) array stride.
