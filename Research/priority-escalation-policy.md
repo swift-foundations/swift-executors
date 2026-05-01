@@ -2,8 +2,8 @@
 
 <!--
 ---
-version: 0.6.0
-last_updated: 2026-04-16
+version: 0.8.0
+last_updated: 2026-04-29
 status: DECISION
 tier: 2
 ---
@@ -698,39 +698,59 @@ public init(
 )
 ```
 
-**Semantics (all platforms).** When `priorityTracking` is `true`:
+**Semantics (per platform).** When `priorityTracking` is `true`,
+each worker thread brackets job execution with the platform's
+`Kernel.Thread.Priority.Override` per
+`qos-bracketing-platform-layering.md` v2.0.0 (RECOMMENDATION):
 
-1. On Darwin, each worker thread brackets job execution with
-   `pthread_override_qos_class_start_np(thread, qos, 0)` at job-start
-   and `pthread_override_qos_class_end_np(override)` at job-end, where
-   `qos` is derived from the job's `ExecutorJob.priority` mapped to
-   `qos_class_t` via the `TaskPriority.qosClass` translation.
-2. On Linux, Windows, FreeBSD: **no-op**. The flag compiles to nothing.
-   Setting it is not an error — the documented contract is "no effect
-   outside Darwin."
-3. On Embedded: **no-op** (no QoS concept; see `embedded-swift-scoping.md`).
+1. **Darwin** — `pthread_override_qos_class_start_np` at job-start,
+   `pthread_override_qos_class_end_np` at job-end. Full override
+   semantics: nestable, deinit-ends, ~853 ns/cycle (spike-validated
+   2026-04-16).
+2. **Linux** — `setpriority(PRIO_PROCESS, gettid(), nice)` save-restore.
+   Lowering (utility, background) succeeds unprivileged. Raising
+   (default and above) requires `CAP_SYS_NICE` and silently no-ops
+   without it. Best-effort contract documented at the L3-unifier API.
+3. **Windows** — `SetThreadPriority(GetCurrentThread(), priority)`
+   with `GetThreadPriority` save-restore. Unprivileged within the
+   process's priority class.
+4. **Embedded** — **no-op** (no OS thread-priority concept; see
+   `embedded-swift-scoping.md`).
+5. **FreeBSD / other POSIX** — `Linux.Kernel.Thread.Priority.Override`
+   may be reused if setpriority semantics match; otherwise no-op until
+   a per-platform L3-policy is added.
 
-**Documentation tone requirement.** DocC on `priorityTracking` MUST
-state "Darwin-only" in the summary line and MUST NOT use language
-implying cross-platform support. A concrete template:
+**Documentation tone requirement (revised v0.8.0).** DocC on
+`priorityTracking` MUST state per-platform semantics honestly. No
+platform is described as no-op; Linux's asymmetric ceiling is
+called out explicitly. A concrete template:
 
-> /// Enables per-job thread-QoS tracking on Darwin.
+> /// Enables per-job thread-priority tracking.
 > ///
-> /// When `true`, each worker thread's QoS class is bumped to match the
-> /// current job's priority for the duration of job execution via
-> /// `pthread_override_qos_class_start_np`, then reverted at job-end.
-> /// This is the M3 mechanism of the priority-inversion policy
-> /// (`Research/priority-escalation-policy.md`); it implements the PIP
-> /// bound for the running job.
+> /// When `true`, each worker thread's OS-level priority is bumped
+> /// to match the current job's priority for the duration of job
+> /// execution, then reverted at job-end. This is the M3 mechanism
+> /// of the priority-inversion policy
+> /// (`Research/priority-escalation-policy.md`); it implements the
+> /// PIP bound for the running job.
 > ///
-> /// **No-op on Linux, Windows, and Embedded.** These platforms lack
-> /// an unprivileged QoS primitive equivalent to Darwin's pthread
-> /// override API. The flag is accepted for source-compatibility but
-> /// produces no runtime effect. See `priority-escalation-policy.md`
-> /// for the cross-platform story.
+> /// **Per-platform behaviour:**
+> /// - **Darwin:** `pthread_override_qos_class_start_np` /
+> ///   `_end_np`. Full override semantics, nestable, sub-µs cost.
+> /// - **Linux:** `setpriority(2)` save-restore on the calling
+> ///   thread's tid. Lowering (utility, background) succeeds
+> ///   unprivileged; raising (default and above) requires
+> ///   `CAP_SYS_NICE` and silently no-ops without it.
+> /// - **Windows:** `SetThreadPriority` save-restore. Unprivileged
+> ///   within the calling process's priority class.
+> /// - **Embedded:** No-op. No OS thread-priority concept.
 > ///
-> /// Default: `false` for v1. Will default to `true` on Darwin in v2
-> /// once the override lifecycle is validated in production.
+> /// See `qos-bracketing-platform-layering.md` for the layering
+> /// rationale and per-platform contract.
+> ///
+> /// Default: `false` for v1. Will default to `true` on all
+> /// supported platforms in v2 once the override lifecycle is
+> /// validated in production.
 
 **Rationale for the surface.**
 
@@ -773,10 +793,21 @@ implying cross-platform support. A concrete template:
    because the thread is not ours to bracket. Cross-reference lives in
    Cooperative's analysis section ("`Executor.Cooperative.runUntil`")
    below; no amendment to the DECISION note required.
-6. **Resolve the Linux thread-QoS story for v2** (not v1). Candidate
-   mechanism: probe `CAP_SYS_NICE` at executor construction; enable M3
-   only when the capability is present. Out of scope for v1 —
-   implementation deferred, not blocking DECISION.
+6. ~~**Resolve the Linux thread-QoS story for v2** (not v1).~~
+   **DONE for v1** as of 2026-04-29. Per
+   `qos-bracketing-platform-layering.md` v2.0.0 (RECOMMENDATION) and
+   the principal directive "all our packages MUST support darwin,
+   linux, windows equally", Linux M3 is in v1 scope with
+   best-effort semantics: `setpriority(2)` on the calling thread's
+   tid; lowering (utility / background) succeeds unprivileged;
+   raising (default and above) requires `CAP_SYS_NICE` and silently
+   no-ops without it. The wrapper is `Linux.Kernel.Thread.Priority.Override`
+   in swift-linux (L3-policy). Same direction for Windows, which
+   gets `Windows.Kernel.Thread.Priority.Override` via
+   `SetThreadPriority`/`GetThreadPriority` save-restore. The L1
+   "no-op outside Darwin" contract from the v0.6.0 Locked Surface
+   is superseded: priorityTracking now does meaningful work on all
+   three platforms (modulo Linux's documented asymmetric ceiling).
 7. **Flip `Options.priorityTracking` default to `true` on Darwin in
    v2.** The v1 default is `false` because the override lifecycle code
    is new. Once validated in production, v2 should default to `true` on
@@ -787,9 +818,23 @@ implying cross-platform support. A concrete template:
 8. **Implement the bracketed QoS override at the drain path.** Not
    blocking DECISION because the surface is locked and the mechanism
    is spike-validated. Implementation is a downstream follow-up:
-   introduce `Polling.Options` (or keep the init parameter), propagate
-   `priorityTracking` through the worker loop, and gate the
-   `pthread_override_*` calls behind `#if canImport(Darwin)`.
+   introduce `Polling.Options` (or keep the init parameter) and
+   propagate `priorityTracking` through the worker loop. The
+   **layering** of the syscall implementation is locked by
+   `qos-bracketing-platform-layering.md` (RECOMMENDATION,
+   2026-04-29): the `pthread_override_*_np` calls live at L2
+   (swift-darwin-standard) as `Darwin.Kernel.Thread.Priority.Override`,
+   with cross-platform unification at L3-unifier (swift-kernel) via
+   `Kernel.Thread.Priority.Override` typealias / no-op struct, and
+   swift-executors consumes the unified API with no `#if
+   canImport(Darwin)` and no `import Darwin`. The
+   originally-prescribed "gate behind `#if canImport(Darwin)` inside
+   swift-executors" approach was superseded once the platform skill
+   ([PLAT-ARCH-008a], [PLAT-ARCH-008c], [PLAT-ARCH-008d],
+   [PLAT-ARCH-008h]) was applied — the M3 mechanism's substance
+   (Darwin-only QoS bump, opt-in flag, no-op elsewhere) is unchanged;
+   only the layering of where the syscalls live moves. See
+   `qos-bracketing-platform-layering.md` for the full analysis.
 
 ### Escalation note
 
@@ -884,3 +929,36 @@ Darwin-only recommendation.
 - `cooperative-donation-contract.md` (coordination on "caller-owned
   priority" declaration)
 - `embedded-swift-scoping.md` (coordination on Embedded degradation)
+- `qos-bracketing-platform-layering.md` (locks the implementation
+  layering of Next Step #8 — pthread_override at L2, unified at
+  L3-unifier, consumed at L3-domain with no platform conditionals)
+- `executor-job-deadline-naming.md` (frees the `Priority` name from
+  the deadline-keyed queue so the L1 typed `Executor.Job.Priority`
+  enum from the layering doc can occupy it)
+
+## Changelog
+
+- **v0.8.0 (2026-04-29).** Next Step #6 closed for v1: Linux M3 no
+  longer deferred to v2. Per `qos-bracketing-platform-layering.md`
+  v2.0.0 and the principal directive "all our packages MUST support
+  darwin, linux, windows equally", all three platforms have real
+  L3-policy bracketing wrappers in v1: pthread_override on Darwin
+  (full semantics), setpriority on Linux (best-effort lower-only
+  unprivileged; full with `CAP_SYS_NICE`), SetThreadPriority on
+  Windows (full save-restore). The v0.6.0 "no-op outside Darwin"
+  contract on `priorityTracking` is superseded.
+- **v0.7.0 (2026-04-29).** Next Step #8 amended: the
+  `pthread_override_*` implementation layering is delegated to
+  `qos-bracketing-platform-layering.md` (RECOMMENDATION). The M3
+  mechanism's substance is unchanged; only the location of the
+  syscall implementation moves from `#if canImport(Darwin)` inside
+  swift-executors to L2 swift-darwin-standard with L3-unifier
+  composition. Driven by application of the platform skill
+  ([PLAT-ARCH-008a], [PLAT-ARCH-008c], [PLAT-ARCH-008d],
+  [PLAT-ARCH-008h]) and the principal directive "all platform-specific
+  code must be placed at L2 packages." References added to
+  `qos-bracketing-platform-layering.md` and
+  `executor-job-deadline-naming.md`.
+- **v0.6.0 (2026-04-16).** DECISION reached. M3-only Darwin opt-in
+  via `priorityTracking: Bool`; M1/M2/M4 rejected for v1; per-executor
+  policies locked; spike-validated.
