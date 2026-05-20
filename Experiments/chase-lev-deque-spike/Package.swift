@@ -11,7 +11,7 @@ let package = Package(
         .executableTarget(
             name: "chase-lev-deque-spike",
             dependencies: [
-                .product(name: "Memory Primitives Core", package: "swift-memory-primitives")
+                .product(name: "Memory Inline Primitives", package: "swift-memory-primitives")
             ]
         )
     ]

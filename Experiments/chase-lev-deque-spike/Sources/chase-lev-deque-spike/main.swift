@@ -44,7 +44,7 @@
 //     guaranteed by the Chase-Lev algorithm itself, not by the type system.
 
 import Synchronization
-import Memory_Primitives_Core
+import Memory_Inline_Primitives
 
 // MARK: - Chase-Lev Deque
 
