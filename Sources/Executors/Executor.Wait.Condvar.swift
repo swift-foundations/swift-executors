@@ -3,7 +3,7 @@
 //  swift-executors
 //
 
-internal import Thread_Synchronization
+internal import Synchronizer_Blocking
 
 extension Executor.Wait {
     /// Wait primitive backed by pthread_cond_wait.
@@ -19,7 +19,7 @@ extension Executor.Wait {
     /// existing type gains a retroactive conformance via typealias bridge
     /// (non-breaking).
     public final class Condvar: Sendable {
-        internal let sync: Kernel.Thread.Synchronization<1>
+        internal let sync: Synchronizer.Blocking<1>
 
         public init() {
             self.sync = .init()
@@ -32,7 +32,7 @@ extension Executor.Wait.Condvar {
     public func withLock<R, E: Swift.Error>(
         _ body: () throws(E) -> R
     ) throws(E) -> R {
-        try sync.withLock(body)
+        try sync.synchronize(body)
     }
 
     /// Wait until signaled. Caller must already hold the lock (via `withLock`);

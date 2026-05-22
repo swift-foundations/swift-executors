@@ -16,10 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../swift-kernel"),
-        // MUST depend on "Thread Synchronization" product only, never "Threads"
-        // (umbrella) or "Thread Pool" — those back-depend on Executors and
-        // would create a package-level cycle.
-        .package(path: "../swift-threads"),
+        .package(path: "../swift-synchronizers"),
         .package(path: "../../swift-primitives/swift-executor-primitives"),
         .package(path: "../../swift-primitives/swift-property-primitives"),
         .package(path: "../../swift-primitives/swift-ordinal-primitives"),
@@ -31,7 +28,7 @@ let package = Package(
             name: "Executors",
             dependencies: [
                 .product(name: "Kernel", package: "swift-kernel"),
-                .product(name: "Thread Synchronization", package: "swift-threads"),
+                .product(name: "Synchronizer Blocking", package: "swift-synchronizers"),
                 .product(name: "Executor Primitives", package: "swift-executor-primitives"),
                 .product(name: "Property Primitives", package: "swift-property-primitives"),
                 .product(name: "Ordinal Primitives", package: "swift-ordinal-primitives"),

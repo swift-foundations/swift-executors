@@ -4,7 +4,7 @@
 //
 
 public import Property_Primitives
-internal import Thread_Synchronization
+internal import Synchronizer_Blocking
 
 extension Executor.Wait.Condvar {
     /// Tag for wake operations.
