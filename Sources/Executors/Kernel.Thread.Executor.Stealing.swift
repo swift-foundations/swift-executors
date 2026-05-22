@@ -6,6 +6,7 @@
 import Synchronization
 import Index_Primitives
 import Ordinal_Primitives
+import Ordinal_Primitives_Standard_Library_Integration
 
 extension Kernel.Thread.Executor {
     /// N-owned-threads with per-thread deques and work-stealing.
@@ -19,8 +20,8 @@ extension Kernel.Thread.Executor {
     ///
     /// This type is `Sendable` by virtue of internal synchronization. The
     /// cross-worker state it owns is limited to:
-    /// - `cursor: Atomic<Index<Kernel.Thread>>` -- round-robin dispatcher
-    ///   index, mutated only by `advance(within:)`.
+    /// - `cursor: Ordinal.AtomicPosition<Kernel.Thread>` -- round-robin
+    ///   dispatcher index, mutated only by `advance(within:)`.
     /// - `_shutdown: Shutdown.Flag` -- atomic boolean.
     /// - `workers: [Worker]` -- an immutable-after-init array of
     ///   independently-synchronized `Worker` instances (see the Worker type's
@@ -54,14 +55,14 @@ extension Kernel.Thread.Executor {
         internal let workers: [Worker]
         internal let _shutdown: Executor_Primitives.Executor.Shutdown.Flag
         internal let priorityTracking: Bool
-        private let cursor: Atomic<Index<Kernel.Thread>>
+        private let cursor: Ordinal.AtomicPosition<Kernel.Thread>
         public let count: Kernel.Thread.Count
 
         public init(_ options: Options = .init()) {
             self.count = options.count
             self._shutdown = .init()
             self.priorityTracking = options.priorityTracking
-            self.cursor = .init(.zero)
+            self.cursor = .init()
             self.workers = Array(count: options.count) { position in
                 Worker(id: position)
             }
