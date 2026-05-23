@@ -8,7 +8,6 @@
 import Synchronization
 import Index_Primitives
 import Ordinal_Primitives
-import Ordinal_Primitives_Standard_Library_Integration
 import CPU_Primitives
 
 extension Kernel.Thread.Executor {
@@ -44,7 +43,7 @@ extension Kernel.Thread.Executor {
         // WHY: CPU.Cache.Padded so that the hot write-contended atomic cannot
         // WHY: false-share with the read-mostly `executors` array reference
         // WHY: and `count` scalar. See numa-aware-sharding.md Q1.
-        private let cursor: CPU.Cache.Padded<Ordinal.AtomicPosition<Kernel.Thread>>
+        private let cursor: CPU.Cache.Padded<Atomic<Index<Kernel.Thread>>>
 
         /// Creates a new sharded executor pool with the given options.
         ///
@@ -55,7 +54,7 @@ extension Kernel.Thread.Executor {
             self.executors = Array(count: options.count) { _ in
                 Kernel.Thread.Executor(priorityTracking: priorityTracking)
             }
-            self.cursor = .init(Ordinal.AtomicPosition<Kernel.Thread>())
+            self.cursor = .init(Atomic<Index<Kernel.Thread>>(.zero))
         }
     }
 }
