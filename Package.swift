@@ -15,13 +15,13 @@ let package = Package(
         .library(name: "Executors", targets: ["Executors"]),
     ],
     dependencies: [
-        .package(path: "../swift-kernel"),
-        .package(path: "../swift-synchronizers"),
-        .package(path: "../../swift-primitives/swift-executor-primitives"),
-        .package(path: "../../swift-primitives/swift-property-primitives"),
-        .package(path: "../../swift-primitives/swift-ordinal-primitives"),
-        .package(path: "../../swift-primitives/swift-index-primitives"),
-        .package(path: "../../swift-primitives/swift-cpu-primitives"),
+        .package(url: "https://github.com/swift-foundations/swift-kernel.git", branch: "main"),
+        .package(url: "https://github.com/swift-foundations/swift-synchronizers.git", branch: "main"),
+        .package(url: "https://github.com/swift-primitives/swift-executor-primitives.git", branch: "main"),
+        .package(url: "https://github.com/swift-primitives/swift-property-primitives.git", branch: "main"),
+        .package(url: "https://github.com/swift-primitives/swift-ordinal-primitives.git", branch: "main"),
+        .package(url: "https://github.com/swift-primitives/swift-index-primitives.git", branch: "main"),
+        .package(url: "https://github.com/swift-primitives/swift-cpu-primitives.git", branch: "main"),
     ],
     targets: [
         .target(
