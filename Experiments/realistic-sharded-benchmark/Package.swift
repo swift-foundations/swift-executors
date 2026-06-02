@@ -5,7 +5,7 @@ let package = Package(
     name: "realistic-sharded-benchmark",
     platforms: [.macOS(.v26)],
     dependencies: [
-        .package(path: "../../../../swift-primitives/swift-cpu-primitives"),
+        .package(url: "https://github.com/swift-primitives/swift-cpu-primitives.git", branch: "main"),
     ],
     targets: [
         .executableTarget(

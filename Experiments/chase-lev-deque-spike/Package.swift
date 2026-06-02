@@ -5,7 +5,7 @@ let package = Package(
     name: "chase-lev-deque-spike",
     platforms: [.macOS(.v26)],
     dependencies: [
-        .package(path: "../../../../swift-primitives/swift-memory-primitives")
+        .package(url: "https://github.com/swift-primitives/swift-memory-primitives.git", branch: "main")
     ],
     targets: [
         .executableTarget(
