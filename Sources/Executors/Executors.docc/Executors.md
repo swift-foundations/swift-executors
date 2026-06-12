@@ -30,7 +30,13 @@ stealing, sharded, cooperative, scheduled, or main-thread.
 ### Cooperative and Scheduled
 
 - ``Executor/Cooperative``
+<!-- ⚠️ W5 QUARANTINE (2026-06-12): Executor.Scheduled carved with the producer's
+Job.Priority park (executor-primitives Package.swift:33); per Ruling 2 / lane-λ in
+.handoffs/HANDOFF-sockets-restoration-kernel-blocker.md. Restore with heap's round.
 - ``Executor/Scheduled``
+-->
+
+
 
 ### Platform
 

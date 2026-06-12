@@ -67,7 +67,13 @@ extension Executor {
     public final class Cooperative: SerialExecutor, @unsafe @unchecked Sendable {
         private var jobs: Executor.Job.Queue
         private var drainBuffer: Executor.Job.Queue
-        private var scheduled: Executor.Job.Priority
+        // ⚠️ W5 QUARANTINE (2026-06-12): sympathetic consumer carve — the producer
+        // parked Executor Job Priority Primitives (Job.Priority stores Heap<Entry>;
+        // heap's umbrella pulls the RED memory-small module; see executor-primitives
+        // Package.swift:33). Carved per Ruling 2 / lane-λ in
+        // .handoffs/HANDOFF-sockets-restoration-kernel-blocker.md.
+        // Restore with heap's round.
+        // private var scheduled: Executor.Job.Priority
         private let wait: Executor.Wait.Condvar
         private let _shutdown: Executor.Shutdown.Flag
         /// Lock-protected by `wait`. Written by `stop()`, reset at `runUntil` entry.
@@ -78,7 +84,7 @@ extension Executor {
         public init() {
             self.jobs = .init()
             self.drainBuffer = .init()
-            self.scheduled = .init()
+            // self.scheduled = .init()  // W5 QUARANTINE (2026-06-12): Job.Priority parked upstream — restore with heap's round
             self.wait = .init()
             self._shutdown = .init()
             self._stopped = false
@@ -106,27 +112,34 @@ extension Executor.Cooperative {
 
 // MARK: - Scheduled Enqueue
 
-extension Executor.Cooperative {
-    /// Schedule a job for execution at a future deadline.
-    ///
-    /// The job is placed into the internal priority queue. The donated
-    /// thread's drain loop wakes on the deadline via timed condvar wait,
-    /// then moves the job to the immediate queue for execution.
-    ///
-    /// When `SchedulingExecutor` ships in the SDK (absent as of macOS
-    /// 26.4 — protocol exists in stdlib source but not in the
-    /// `.swiftinterface`), this method's signature matches the protocol
-    /// requirement; conformance is a one-line addition.
-    public func enqueue(
-        _ job: consuming ExecutorJob,
-        after delay: Duration
-    ) {
-        let deadline = Clock.Continuous.now.advanced(by: delay)
-        let unowned = UnownedJob(job)
-        wait.withLock { scheduled.schedule(unowned, at: deadline) }
-        wait.wake()
-    }
-}
+// ⚠️ W5 QUARANTINE (2026-06-12): sympathetic consumer carve — the producer
+// parked Executor Job Priority Primitives (Job.Priority stores Heap<Entry>;
+// heap's umbrella pulls the RED memory-small module; see executor-primitives
+// Package.swift:33). Carved per Ruling 2 / lane-λ in
+// .handoffs/HANDOFF-sockets-restoration-kernel-blocker.md.
+// Restore with heap's round.
+
+// extension Executor.Cooperative {
+//     /// Schedule a job for execution at a future deadline.
+//     ///
+//     /// The job is placed into the internal priority queue. The donated
+//     /// thread's drain loop wakes on the deadline via timed condvar wait,
+//     /// then moves the job to the immediate queue for execution.
+//     ///
+//     /// When `SchedulingExecutor` ships in the SDK (absent as of macOS
+//     /// 26.4 — protocol exists in stdlib source but not in the
+//     /// `.swiftinterface`), this method's signature matches the protocol
+//     /// requirement; conformance is a one-line addition.
+//     public func enqueue(
+//         _ job: consuming ExecutorJob,
+//         after delay: Duration
+//     ) {
+//         let deadline = Clock.Continuous.now.advanced(by: delay)
+//         let unowned = UnownedJob(job)
+//         wait.withLock { scheduled.schedule(unowned, at: deadline) }
+//         wait.wake()
+//     }
+// }
 
 // MARK: - Run Loop
 
@@ -160,23 +173,27 @@ extension Executor.Cooperative {
             if condition() { return }
 
             let shouldExit = wait.withLock { () -> Bool in
-                // Move ready scheduled jobs into the immediate queue
-                scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
+                // W5 QUARANTINE (2026-06-12): Job.Priority parked upstream — scheduled-drain +
+                // deadline-wait carved; with `enqueue(_:after:)` carved the queue was always
+                // empty, so the bare wait below was already the only live path. Restore with
+                // heap's round.
+                // // Move ready scheduled jobs into the immediate queue
+                // scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
 
                 // Wait until: immediate jobs available, next deadline fires,
                 // stopped, or shutdown
                 while jobs.isEmpty && !_shutdown.isSet && !_stopped {
-                    if let nextDeadline = scheduled.peek {
-                        let remaining = Clock.Continuous.now.duration(to: nextDeadline)
-                        if remaining <= .zero {
-                            scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
-                            continue
-                        }
-                        _ = wait.wait(timeout: remaining)
-                        scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
-                    } else {
+                    // if let nextDeadline = scheduled.peek {
+                    //     let remaining = Clock.Continuous.now.duration(to: nextDeadline)
+                    //     if remaining <= .zero {
+                    //         scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
+                    //         continue
+                    //     }
+                    //     _ = wait.wait(timeout: remaining)
+                    //     scheduled.drain(now: Clock.Continuous.now) { jobs.enqueue($0) }
+                    // } else {
                         wait.wait()
-                    }
+                    // }
                 }
                 if _stopped || _shutdown.isSet { return true }
                 swap(&jobs, &drainBuffer)
