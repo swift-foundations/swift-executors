@@ -9,7 +9,7 @@
 //
 // ===----------------------------------------------------------------------===//
 
-public import Executor_Primitives_Core
+public import Executor_Primitives
 public import Kernel
 
 
